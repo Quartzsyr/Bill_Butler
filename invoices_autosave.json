@@ -1,0 +1,1273 @@
+[
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25332000000553268494_zave旗舰店.pdf",
+    "invoice_number": "25332000000553268494",
+    "items": [
+      {
+        "amount": 2.4,
+        "category": "耗材",
+        "name": "*电子元件*电子元器件 0603 1k 100 个 1 2.3762376237624",
+        "price": 2.4,
+        "quantity": 1.0,
+        "spec": "2.3762376237624",
+        "unit": "*电子元件*电子元器件"
+      },
+      {
+        "amount": 2.4,
+        "category": "耗材",
+        "name": "*电子元件*电子元器件 0603 10k（100 个 1 2.3762376237624",
+        "price": 2.4,
+        "quantity": 1.0,
+        "spec": "2.3762376237624",
+        "unit": "*电子元件*电子元器件"
+      },
+      {
+        "amount": 2.39,
+        "category": "耗材",
+        "name": "*电子元件*电子元器件 0603 100r 100 个 1 2.3663366336634",
+        "price": 2.39,
+        "quantity": 1.0,
+        "spec": "2.3663366336634",
+        "unit": "*电子元件*电子元器件"
+      }
+    ],
+    "seller": "金华图格利西科技有限公司",
+    "tags": [],
+    "total_amount": 7.19,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25332000000553718977_喜巴叮旗舰店.pdf",
+    "invoice_number": "25332000000553718977",
+    "items": [
+      {
+        "amount": 7.1000000000000005,
+        "category": "耗材",
+        "name": "*日用杂品*其他日用杂 小号线夹 50个",
+        "price": 7.1000000000000005,
+        "quantity": 1.0,
+        "spec": "50个",
+        "unit": "件"
+      }
+    ],
+    "seller": "天台龙源泰汽车用品有限公司",
+    "tags": [],
+    "total_amount": 7.1,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25332000000554711590_温州乐迪.pdf",
+    "invoice_number": "25332000000554711590",
+    "items": [
+      {
+        "amount": 28.5,
+        "category": "其他",
+        "name": "*原电池*锂电池 CR-123ACH/1B",
+        "price": 14.25,
+        "quantity": 2.0,
+        "spec": "CR-123ACH/1B",
+        "unit": "粒"
+      }
+    ],
+    "seller": "温州骏伏能源有限公司",
+    "tags": [],
+    "total_amount": 28.5,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月01日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25442000000759397013_sandisk闪迪旗舰店.pdf",
+    "invoice_number": "25442000000759397013",
+    "items": [
+      {
+        "amount": 89.9,
+        "category": "其他",
+        "name": "*计算机外部设备*【优惠 SDSQXA1-128G-（折扣）",
+        "price": 89.9,
+        "quantity": 1.0,
+        "spec": "SDSQXA1-128G-",
+        "unit": "个"
+      },
+      {
+        "amount": -8.92,
+        "category": "其他",
+        "name": "*计算机外部设备*【优惠（折扣）",
+        "price": 8.92,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*计算机外部设备*【优惠"
+      }
+    ],
+    "seller": "合众怡毅（广州）科技有限公司",
+    "tags": [],
+    "total_amount": 80.98,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "第 2 项商品金额为负",
+        "第 2 项商品：数量×单价（1.0×8.92=8.92）与金额（-8.92）不一致"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25442000000761988336.pdf",
+    "invoice_number": "25442000000761988336",
+    "items": [
+      {
+        "amount": 229.0,
+        "category": "其他",
+        "name": "*计算机外部 设备* SDSDXXY-128G-",
+        "price": 229.0,
+        "quantity": 1.0,
+        "spec": "SDSDXXY-128G-",
+        "unit": "个"
+      }
+    ],
+    "seller": "合众怡毅（广州）科技有限 公司",
+    "tags": [],
+    "total_amount": 229.0,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258230775_优信电子企业店.pdf",
+    "invoice_number": "25952000000258230775",
+    "items": [
+      {
+        "amount": 15.0,
+        "category": "耗材",
+        "name": "*电子元件*原装正品",
+        "price": 15.0,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "件"
+      }
+    ],
+    "seller": "",
+    "tags": [],
+    "total_amount": 15.0,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "销售方为空",
+        "购买方为空"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258235472_优信电子企业店.pdf",
+    "invoice_number": "25952000000258235472",
+    "items": [
+      {
+        "amount": 15.5,
+        "category": "耗材",
+        "name": "*电子元件*1.14寸TFT显",
+        "price": 15.5,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "件"
+      }
+    ],
+    "seller": "深圳市优信电子科技有限公司",
+    "tags": [],
+    "total_amount": 15.5,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258237443_risym旗舰店.pdf",
+    "invoice_number": "25952000000258237443",
+    "items": [
+      {
+        "amount": 11.33,
+        "category": "其他",
+        "name": "*集成电路*电子模块 红外对管避障模",
+        "price": 2.8325,
+        "quantity": 4.0,
+        "spec": "红外对管避障模",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市零度电子科技有限公司",
+    "tags": [],
+    "total_amount": 11.33,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258259705_risym旗舰店.pdf",
+    "invoice_number": "25952000000258259705",
+    "items": [
+      {
+        "amount": 4.0,
+        "category": "耗材",
+        "name": "*电子元件*电子线 30CM公对母杜邦",
+        "price": 4.0,
+        "quantity": 1.0,
+        "spec": "30CM公对母杜邦",
+        "unit": "条"
+      },
+      {
+        "amount": 6.8100000000000005,
+        "category": "耗材",
+        "name": "*电子元件*电子线 30CM母对母杜邦",
+        "price": 3.4050000000000002,
+        "quantity": 2.0,
+        "spec": "30CM母对母杜邦",
+        "unit": "条"
+      }
+    ],
+    "seller": "深圳市零度电子科技有限公司",
+    "tags": [],
+    "total_amount": 10.81,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258782283_unnlink旗舰店.pdf",
+    "invoice_number": "25952000000258782283",
+    "items": [
+      {
+        "amount": 24.990000000000002,
+        "category": "其他",
+        "name": "*计算机配套产品*音频设 1783 件 1 22.1150442477876",
+        "price": 24.990000000000002,
+        "quantity": 1.0,
+        "spec": "22.1150442477876",
+        "unit": "*计算机配套产品*音频设"
+      },
+      {
+        "amount": -4.0,
+        "category": "其他",
+        "name": "*计算机配套产品*音频设（折扣）",
+        "price": 4.0,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*计算机配套产品*音频设"
+      }
+    ],
+    "seller": "深圳优联数码科技有限公司",
+    "tags": [],
+    "total_amount": 20.99,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "第 2 项商品金额为负",
+        "第 2 项商品：数量×单价（1.0×4.00=4.00）与金额（-4.00）不一致"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000258929631_tb8589281274.pdf",
+    "invoice_number": "25952000000258929631",
+    "items": [
+      {
+        "amount": 15.41,
+        "category": "其他",
+        "name": "*光电子器件*显示屏模块",
+        "price": 15.41,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市可爱橙科技有限公司",
+    "tags": [],
+    "total_amount": 15.41,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000259074837_洲丰电子经营部.pdf",
+    "invoice_number": "25952000000259074837",
+    "items": [
+      {
+        "amount": 1.0,
+        "category": "耗材",
+        "name": "*电子元件*价外费用 1 0.990099009901",
+        "price": 1.0,
+        "quantity": 1.0,
+        "spec": "0.990099009901",
+        "unit": "*电子元件*价外费用"
+      },
+      {
+        "amount": 5.3999999999999995,
+        "category": "耗材",
+        "name": "*电子元件*LDO线性稳压 3 1.7821782178218",
+        "price": 1.7999999999999998,
+        "quantity": 3.0,
+        "spec": "1.7821782178218",
+        "unit": "*电子元件*LDO线性稳压"
+      }
+    ],
+    "seller": "深圳市子乐芯电子有限公司",
+    "tags": [],
+    "total_amount": 6.4,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏 州 大学",
+    "date": "",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/_25952000000259090730_wgsd旗舰店.pdf",
+    "invoice_number": "25952000000259090730",
+    "items": [
+      {
+        "amount": 5.67,
+        "category": "耗材",
+        "name": "*电子元件*显示屏 新款0.96寸 4管",
+        "price": 5.67,
+        "quantity": 1.0,
+        "spec": "4管",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市鹭湖一号科技有限公司",
+    "tags": [],
+    "total_amount": 5.67,
+    "validation": {
+      "is_valid": false,
+      "errors": [
+        "开票日期为空",
+        "购买方抬头不匹配，当前为“苏 州 大学”，期望为“苏州大学”"
+      ],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "",
+    "date": "2025年10月20日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/7008523A_25957000000137292398.pdf",
+    "invoice_number": "25957000000137292398",
+    "items": [
+      {
+        "amount": 5.29,
+        "category": "其他",
+        "name": "*真空电子器件*滑动开关 SS12D10G5-WJ",
+        "price": 1.058,
+        "quantity": 5.0,
+        "spec": "SS12D10G5-WJ",
+        "unit": "个"
+      },
+      {
+        "amount": -0.27,
+        "category": "其他",
+        "name": "*真空电子器件*滑动开关（折扣）",
+        "price": 0.27,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*真空电子器件*滑动开关"
+      },
+      {
+        "amount": 4.78,
+        "category": "耗材",
+        "name": "*电子元件*直插铝电解电 GR227M025F12RR",
+        "price": 0.23900000000000002,
+        "quantity": 20.0,
+        "spec": "GR227M025F12RR",
+        "unit": "个"
+      },
+      {
+        "amount": 4.45,
+        "category": "其他",
+        "name": "*半导体*肖特基二极管 SK106B",
+        "price": 0.89,
+        "quantity": 5.0,
+        "spec": "SK106B",
+        "unit": "个"
+      },
+      {
+        "amount": 4.18,
+        "category": "耗材",
+        "name": "*电子元件*排针 PZ254V-12-24P",
+        "price": 0.836,
+        "quantity": 5.0,
+        "spec": "PZ254V-12-24P",
+        "unit": "个"
+      },
+      {
+        "amount": 3.9400000000000004,
+        "category": "耗材",
+        "name": "*电子元件*排针 2.54-2*3P针",
+        "price": 0.197,
+        "quantity": 20.0,
+        "spec": "2.54-2*3P针",
+        "unit": "个"
+      },
+      {
+        "amount": 3.75,
+        "category": "耗材",
+        "name": "*电子元件*USB连接器 TYPE-C",
+        "price": 0.375,
+        "quantity": 10.0,
+        "spec": "TYPE-C",
+        "unit": "16PIN"
+      },
+      {
+        "amount": 3.5,
+        "category": "其他",
+        "name": "*微电子组件*线性稳压器 RT9193-33GB",
+        "price": 0.7,
+        "quantity": 5.0,
+        "spec": "RT9193-33GB",
+        "unit": "个"
+      },
+      {
+        "amount": 3.11,
+        "category": "其他",
+        "name": "*半导体*三极管 S8050",
+        "price": 0.0622,
+        "quantity": 50.0,
+        "spec": "S8050",
+        "unit": "个"
+      },
+      {
+        "amount": 2.86,
+        "category": "耗材",
+        "name": "*电子元件*线对板针座 ZH1.5-6A",
+        "price": 0.143,
+        "quantity": 20.0,
+        "spec": "ZH1.5-6A",
+        "unit": "个"
+      },
+      {
+        "amount": -0.13999999999999999,
+        "category": "耗材",
+        "name": "*电子元件*线对板针座（折扣）",
+        "price": 0.13999999999999999,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*线对板针座"
+      },
+      {
+        "amount": 2.84,
+        "category": "耗材",
+        "name": "*电子元件*无源晶振 X49SM8MSD2SC",
+        "price": 0.568,
+        "quantity": 5.0,
+        "spec": "X49SM8MSD2SC",
+        "unit": "个"
+      },
+      {
+        "amount": 2.82,
+        "category": "其他",
+        "name": "*真空电子器件*轻触开关 TS-1088-AR0201",
+        "price": 0.282,
+        "quantity": 10.0,
+        "spec": "TS-1088-AR0201",
+        "unit": "个"
+      },
+      {
+        "amount": -0.13999999999999999,
+        "category": "其他",
+        "name": "*真空电子器件*轻触开关（折扣）",
+        "price": 0.13999999999999999,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*真空电子器件*轻触开关"
+      },
+      {
+        "amount": 2.5999999999999996,
+        "category": "其他",
+        "name": "*配电控制设备*插头 XT30PW-M30.G.Y",
+        "price": 2.5999999999999996,
+        "quantity": 1.0,
+        "spec": "XT30PW-M30.G.Y",
+        "unit": "个"
+      },
+      {
+        "amount": 2.1799999999999997,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 CL31A106KBHNNN",
+        "price": 0.21799999999999997,
+        "quantity": 10.0,
+        "spec": "CL31A106KBHNNN",
+        "unit": "个"
+      },
+      {
+        "amount": -0.03,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容（折扣）",
+        "price": 0.03,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电容"
+      },
+      {
+        "amount": 2.06,
+        "category": "其他",
+        "name": "*光电子器件*发光二极管 XL-1608SURC-06",
+        "price": 0.0206,
+        "quantity": 100.0,
+        "spec": "XL-1608SURC-06",
+        "unit": "个"
+      },
+      {
+        "amount": 1.5599999999999998,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 CL10A105KB8NNN",
+        "price": 0.031199999999999995,
+        "quantity": 50.0,
+        "spec": "CL10A105KB8NNN",
+        "unit": "个"
+      },
+      {
+        "amount": -0.02,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容（折扣）",
+        "price": 0.02,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电容"
+      },
+      {
+        "amount": 1.55,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 CC0603KRX7R9BB",
+        "price": 0.0155,
+        "quantity": 100.0,
+        "spec": "CC0603KRX7R9BB",
+        "unit": "个"
+      },
+      {
+        "amount": 1.2600000000000002,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 CL10B223KB8NNN",
+        "price": 0.025200000000000004,
+        "quantity": 50.0,
+        "spec": "CL10B223KB8NNN",
+        "unit": "个"
+      },
+      {
+        "amount": -0.04,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容（折扣）",
+        "price": 0.04,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电容"
+      },
+      {
+        "amount": 0.7,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF4701T5E",
+        "price": 0.006999999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF4701T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.03,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.03,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.69,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF1501T5E",
+        "price": 0.0069,
+        "quantity": 100.0,
+        "spec": "0603WAF1501T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.03,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.03,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6699999999999999,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF0000T5E",
+        "price": 0.006699999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF0000T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.02,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.02,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6699999999999999,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF5101T5E",
+        "price": 0.006699999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF5101T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.03,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.03,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6599999999999999,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF2001T5E",
+        "price": 0.006599999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF2001T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.03,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.03,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6599999999999999,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF1000T5E",
+        "price": 0.006599999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF1000T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.02,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.02,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6499999999999999,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF1001T5E",
+        "price": 0.006499999999999999,
+        "quantity": 100.0,
+        "spec": "0603WAF1001T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.01,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.01,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.6200000000000001,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF220JT5E",
+        "price": 0.006200000000000001,
+        "quantity": 100.0,
+        "spec": "0603WAF220JT5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.02,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.02,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 0.5900000000000001,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 0603WAF1002T5E",
+        "price": 0.005900000000000001,
+        "quantity": 100.0,
+        "spec": "0603WAF1002T5E",
+        "unit": "个"
+      },
+      {
+        "amount": -0.01,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻（折扣）",
+        "price": 0.01,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "*电子元件*贴片电阻"
+      },
+      {
+        "amount": 10.0,
+        "category": "耗材",
+        "name": "*电子元件*价外费用（配",
+        "price": 10.0,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "次"
+      }
+    ],
+    "seller": "苏州大学 名称:深圳市立创电子商务有限公司",
+    "tags": [],
+    "total_amount": 67.8,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "购买方为空",
+        "第 2 项商品金额为负",
+        "第 2 项商品：数量×单价（1.0×0.27=0.27）与金额（-0.27）不一致",
+        "第 11 项商品金额为负",
+        "第 11 项商品：数量×单价（1.0×0.14=0.14）与金额（-0.14）不一致",
+        "第 14 项商品金额为负",
+        "第 14 项商品：数量×单价（1.0×0.14=0.14）与金额（-0.14）不一致",
+        "第 17 项商品金额为负",
+        "第 17 项商品：数量×单价（1.0×0.03=0.03）与金额（-0.03）不一致",
+        "第 20 项商品金额为负",
+        "第 20 项商品：数量×单价（1.0×0.02=0.02）与金额（-0.02）不一致",
+        "第 23 项商品金额为负",
+        "第 23 项商品：数量×单价（1.0×0.04=0.04）与金额（-0.04）不一致",
+        "第 25 项商品金额为负",
+        "第 25 项商品：数量×单价（1.0×0.03=0.03）与金额（-0.03）不一致",
+        "第 27 项商品金额为负",
+        "第 27 项商品：数量×单价（1.0×0.03=0.03）与金额（-0.03）不一致",
+        "第 29 项商品金额为负",
+        "第 29 项商品：数量×单价（1.0×0.02=0.02）与金额（-0.02）不一致",
+        "第 31 项商品金额为负",
+        "第 31 项商品：数量×单价（1.0×0.03=0.03）与金额（-0.03）不一致",
+        "第 33 项商品金额为负",
+        "第 33 项商品：数量×单价（1.0×0.03=0.03）与金额（-0.03）不一致",
+        "第 35 项商品金额为负",
+        "第 35 项商品：数量×单价（1.0×0.02=0.02）与金额（-0.02）不一致",
+        "第 37 项商品金额为负",
+        "第 37 项商品：数量×单价（1.0×0.01=0.01）与金额（-0.01）不一致",
+        "第 39 项商品金额为负",
+        "第 39 项商品：数量×单价（1.0×0.02=0.02）与金额（-0.02）不一致",
+        "第 41 项商品金额为负",
+        "第 41 项商品：数量×单价（1.0×0.01=0.01）与金额（-0.01）不一致"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "",
+    "date": "2025年12月01日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/digital_25327000001567965403.pdf",
+    "invoice_number": "25327000001567965403",
+    "items": [
+      {
+        "amount": 399.0,
+        "category": "其他",
+        "name": "*计算机外部设备*致态（ZhiTai）长江存储 1TB Ti600 1TB",
+        "price": 399.0,
+        "quantity": 1.0,
+        "spec": "1TB",
+        "unit": "个"
+      },
+      {
+        "amount": -5.0200000000000005,
+        "category": "其他",
+        "name": "*计算机外部设备*致态（ZhiTai）长江存储（折扣）",
+        "price": 5.0200000000000005,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "1TB"
+      }
+    ],
+    "seller": "",
+    "tags": [],
+    "total_amount": 393.98,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "销售方为空",
+        "购买方为空",
+        "第 2 项商品金额为负",
+        "第 2 项商品：数量×单价（1.0×5.02=5.02）与金额（-5.02）不一致"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/dzfp_25112000000268622109_北京一林科技有限 公司_20251202121645.pdf",
+    "invoice_number": "25112000000268622109",
+    "items": [
+      {
+        "amount": 6.9,
+        "category": "耗材",
+        "name": "*塑料制品*底座 塑料底座",
+        "price": 2.3000000000000003,
+        "quantity": 3.0,
+        "spec": "塑料底座",
+        "unit": "个"
+      },
+      {
+        "amount": 2.1,
+        "category": "耗材",
+        "name": "*电子元件*电子元器件 PCB固定板",
+        "price": 2.1,
+        "quantity": 1.0,
+        "spec": "PCB固定板",
+        "unit": "个"
+      },
+      {
+        "amount": 12.0,
+        "category": "耗材",
+        "name": "*电子元件*电子元器件 碳纤维杆",
+        "price": 12.0,
+        "quantity": 1.0,
+        "spec": "碳纤维杆",
+        "unit": "个"
+      }
+    ],
+    "seller": "北京一林科技有限公司",
+    "tags": [],
+    "total_amount": 21.0,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/dzfp_25132000000215555402_桃城区爱豆模型科技 工作室_20251202090027.pdf",
+    "invoice_number": "25132000000215555402",
+    "items": [
+      {
+        "amount": 6.199999999999999,
+        "category": "其他",
+        "name": "*教具*太阳能板支架 P1",
+        "price": 6.199999999999999,
+        "quantity": 1.0,
+        "spec": "P1",
+        "unit": "袋"
+      }
+    ],
+    "seller": "桃城区爱豆模型科技工作室",
+    "tags": [],
+    "total_amount": 6.2,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/dzfp_25952000000258454339_深圳市美信凌特科技有 限公司_20251202120956.pdf",
+    "invoice_number": "25952000000258454339",
+    "items": [
+      {
+        "amount": 12.8,
+        "category": "耗材",
+        "name": "*电子元件*芯片 STM32F407ZGT6",
+        "price": 12.8,
+        "quantity": 1.0,
+        "spec": "STM32F407ZGT6",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市美信凌特科技有限公司",
+    "tags": [],
+    "total_amount": 12.8,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/dzfp_25952000000258498214_深圳市荣泰宏业科技有 限公司_20251202135818.pdf",
+    "invoice_number": "25952000000258498214",
+    "items": [
+      {
+        "amount": 4.55,
+        "category": "耗材",
+        "name": "*电子元件*电子模块 L298N模块",
+        "price": 4.55,
+        "quantity": 1.0,
+        "spec": "L298N模块",
+        "unit": "个"
+      },
+      {
+        "amount": 6.7,
+        "category": "耗材",
+        "name": "*电子元件*电子模块 ESP-01S模块",
+        "price": 6.7,
+        "quantity": 1.0,
+        "spec": "ESP-01S模块",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市荣泰宏业科技有限公司",
+    "tags": [],
+    "total_amount": 11.25,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "",
+    "date": "2025年06月17日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/SO2506140283.pdf",
+    "invoice_number": "25957000000083684655",
+    "items": [
+      {
+        "amount": 5.46,
+        "category": "其他",
+        "name": "*半导体*静电和浪涌保护 CESD3V3D3 YU",
+        "price": 0.1365,
+        "quantity": 40.0,
+        "spec": "YU",
+        "unit": "个"
+      },
+      {
+        "amount": 3.87,
+        "category": "其他",
+        "name": "*微电子组件*线性稳压器 CJA1117B-3.3",
+        "price": 0.387,
+        "quantity": 10.0,
+        "spec": "CJA1117B-3.3",
+        "unit": "个"
+      },
+      {
+        "amount": 3.4699999999999998,
+        "category": "其他",
+        "name": "*微电子组件*USB转换芯 CH340C",
+        "price": 3.4699999999999998,
+        "quantity": 1.0,
+        "spec": "CH340C",
+        "unit": "个"
+      },
+      {
+        "amount": 3.4,
+        "category": "耗材",
+        "name": "*电子元件*自恢复保险丝 BSMD0805-100-6",
+        "price": 0.33999999999999997,
+        "quantity": 10.0,
+        "spec": "BSMD0805-100-6",
+        "unit": "个"
+      },
+      {
+        "amount": 3.1399999999999997,
+        "category": "其他",
+        "name": "*半导体*肖特基二极管 BAT54C,215",
+        "price": 0.0628,
+        "quantity": 50.0,
+        "spec": "BAT54C,215",
+        "unit": "个"
+      },
+      {
+        "amount": 3.11,
+        "category": "其他",
+        "name": "*半导体*肖特基二极管 B5819WS",
+        "price": 0.1555,
+        "quantity": 20.0,
+        "spec": "B5819WS",
+        "unit": "个"
+      },
+      {
+        "amount": 3.1,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 GRM1555C1H220J",
+        "price": 0.0155,
+        "quantity": 200.0,
+        "spec": "GRM1555C1H220J",
+        "unit": "个"
+      },
+      {
+        "amount": 2.9299999999999997,
+        "category": "耗材",
+        "name": "*电子元件*贴片电容 CC0805KRX7R9BB",
+        "price": 0.029299999999999996,
+        "quantity": 100.0,
+        "spec": "CC0805KRX7R9BB",
+        "unit": "个"
+      },
+      {
+        "amount": 2.7399999999999998,
+        "category": "其他",
+        "name": "*真空电子器件*轻触开关 TSA363G25-250H",
+        "price": 0.27399999999999997,
+        "quantity": 10.0,
+        "spec": "TSA363G25-250H",
+        "unit": "个"
+      },
+      {
+        "amount": 0.39999999999999997,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 RC0402FR-074K7",
+        "price": 0.004,
+        "quantity": 100.0,
+        "spec": "RC0402FR-074K7",
+        "unit": "个"
+      },
+      {
+        "amount": 0.38999999999999996,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 RC0402FR-075K1",
+        "price": 0.0038999999999999994,
+        "quantity": 100.0,
+        "spec": "RC0402FR-075K1",
+        "unit": "个"
+      },
+      {
+        "amount": 0.33999999999999997,
+        "category": "耗材",
+        "name": "*电子元件*贴片电阻 RC0402FR-0710K",
+        "price": 0.0034,
+        "quantity": 100.0,
+        "spec": "RC0402FR-0710K",
+        "unit": "个"
+      },
+      {
+        "amount": 7.0,
+        "category": "其他",
+        "name": "*半导体*价外费用（配送",
+        "price": 7.0,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "次"
+      }
+    ],
+    "seller": "苏州大学 名称:深圳市立创电子商务有限公司",
+    "tags": [],
+    "total_amount": 39.35,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "购买方为空"
+      ],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月01日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/其他-57.8元-深圳拓竹科技有限公司-2025.12.01-发票.pdf",
+    "invoice_number": "25952000000258008601",
+    "items": [
+      {
+        "amount": 57.8,
+        "category": "耗材",
+        "name": "*塑料制品*拓竹PETG HF G02-",
+        "price": 57.8,
+        "quantity": 1.0,
+        "spec": "G02-",
+        "unit": "卷"
+      }
+    ],
+    "seller": "深圳拓竹科技有限公司",
+    "tags": [],
+    "total_amount": 57.8,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/设备费-14.12元-深圳市零度电子科技有限公司-2025.12.02-发票.pdf",
+    "invoice_number": "25952000000258257611",
+    "items": [
+      {
+        "amount": 14.120000000000001,
+        "category": "其他",
+        "name": "*集成电路*电子模块 STM32F103C8T6",
+        "price": 14.120000000000001,
+        "quantity": 1.0,
+        "spec": "STM32F103C8T6",
+        "unit": "个"
+      }
+    ],
+    "seller": "深圳市零度电子科技有限公司",
+    "tags": [],
+    "total_amount": 14.12,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏 州 大 学",
+    "date": "",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/设备费-16.30元-深 圳 市 优信电子科技有限公司-2025.12.02-发票.pdf",
+    "invoice_number": "25952000000258227887",
+    "items": [
+      {
+        "amount": 16.3,
+        "category": "耗材",
+        "name": "*电子元件*",
+        "price": 16.3,
+        "quantity": 1.0,
+        "spec": "",
+        "unit": "件"
+      }
+    ],
+    "seller": "深 圳 市 优信电子科技有限公司",
+    "tags": [],
+    "total_amount": 16.3,
+    "validation": {
+      "is_valid": false,
+      "errors": [
+        "开票日期为空",
+        "购买方抬头不匹配，当前为“苏 州 大 学”，期望为“苏州大学”"
+      ],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年11月07日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/设备费-47.50元-广州市星翼电子科技有限公司-2025.11.07-发票.pdf",
+    "invoice_number": "25442000000693969733",
+    "items": [
+      {
+        "amount": 47.5,
+        "category": "耗材",
+        "name": "*电子元件*模块 串口角度传感器",
+        "price": 47.5,
+        "quantity": 1.0,
+        "spec": "串口角度传感器",
+        "unit": "个"
+      }
+    ],
+    "seller": "广州市星翼电子科技有限公司",
+    "tags": [],
+    "total_amount": 47.5,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  },
+  {
+    "buyer": "苏州大学",
+    "date": "2025年12月02日",
+    "file_path": "D:/syr/车/2228410216-石殷睿-232.98/发票/设备费-249.00元-诏安县嘉卓贸易有限公司-2025.12.02-发票.pdf",
+    "invoice_number": "25352000000143020010",
+    "items": [
+      {
+        "amount": 249.0,
+        "category": "其他",
+        "name": "*计算机外部设备*固态硬 512GB",
+        "price": 249.0,
+        "quantity": 1.0,
+        "spec": "512GB",
+        "unit": "个"
+      }
+    ],
+    "seller": "诏安县嘉卓贸易有限公司",
+    "tags": [],
+    "total_amount": 249.0,
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "checked_at": "2025-12-04 00:30:55"
+    }
+  }
+]

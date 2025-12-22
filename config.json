@@ -1,0 +1,19 @@
+{
+  "tesseract_path": "E:/Tesseract-OCR/tesseract.exe",
+  "ocr_lang": "",
+  "auto_load_invoices": true,
+  "match_tolerance": 0.01,
+  "auto_backup": true,
+  "backup_interval": 7,
+  "backup_path": "",
+  "export_path": "",
+  "export_include_validation": true,
+  "auto_validate": true,
+  "validation_strictness": "normal",
+  "list_show_tags": true,
+  "list_show_validation": true,
+  "preview_resolution": 250,
+  "show_save_prompt": true,
+  "confirm_delete": true,
+  "buyer_expected_name": "苏州大学"
+}
