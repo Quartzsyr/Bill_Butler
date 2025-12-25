@@ -1,0 +1,4494 @@
+import sys
+import os
+
+# ========= 在导入 pdfplumber 之前，优先解决 pypdfium2 / pdfium.dll 路径问题 =========
+# 兼容多种打包方式（PyInstaller onefile / onedir）以及不同版本的 pypdfium2
+
+def _ensure_pdfium_dll():
+    """
+    尝试在打包后的目录或临时解压目录中寻找 pdfium.dll，
+    找到后通过 PATH / add_dll_directory / 环境变量 告诉 pypdfium2 使用该路径。
+    """
+    # 1. 基础目录：开发环境用源码目录，打包环境用 _MEIPASS
+    if getattr(sys, "frozen", False):
+        base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.argv[0])))
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    # 2. exe 所在目录（PyInstaller onedir 时资源通常在这里）
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    candidate_dirs = [
+        # 老版本 pypdfium2_raw 目录
+        os.path.join(base_path, "pypdfium2_raw"),
+        os.path.join(base_path, "_internal", "pypdfium2_raw"),
+        os.path.join(exe_dir, "pypdfium2_raw"),
+        os.path.join(exe_dir, "_internal", "pypdfium2_raw"),
+        # 新版本 pypdfium2 目录（常见结构）
+        os.path.join(base_path, "pypdfium2"),
+        os.path.join(base_path, "_internal", "pypdfium2"),
+        os.path.join(exe_dir, "pypdfium2"),
+        os.path.join(exe_dir, "_internal", "pypdfium2"),
+    ]
+
+    pdfium_dir = None
+
+    # 先在常见目录里直接找
+    for d in candidate_dirs:
+        dll_path = os.path.join(d, "pdfium.dll")
+        if os.path.exists(dll_path):
+            pdfium_dir = d
+            break
+
+    # 如果还没找到，再在 base_path / exe_dir 里递归搜索一次（防止目录名有版本号之类）
+    if pdfium_dir is None:
+        for root in [base_path, exe_dir]:
+            if not os.path.isdir(root):
+                continue
+            for cur_root, _dirs, files in os.walk(root):
+                if "pdfium.dll" in files:
+                    pdfium_dir = cur_root
+                    break
+            if pdfium_dir is not None:
+                break
+
+    if not pdfium_dir:
+        # 找不到就直接返回，让后续逻辑走 pdfplumber 默认后端（可能退回到纯文本解析）
+        return
+
+    pdfium_dll_path = os.path.join(pdfium_dir, "pdfium.dll")
+    if not os.path.exists(pdfium_dll_path):
+        return
+
+    # 3. 告诉系统 / pypdfium2 使用该 dll
+    current_path = os.environ.get("PATH", "")
+    if pdfium_dir not in current_path:
+        os.environ["PATH"] = pdfium_dir + os.pathsep + current_path
+
+    if hasattr(os, "add_dll_directory"):
+        try:
+            os.add_dll_directory(pdfium_dir)
+        except Exception:
+            # 某些环境不支持，忽略即可
+            pass
+
+    # pypdfium2 官方支持的环境变量
+    os.environ["PYPDFIUM2_LIB_PATH"] = pdfium_dll_path
+    os.environ["PYPDFIUM2_RAW_PATH"] = pdfium_dir
+
+    # 兼容旧版 pypdfium2_raw 直接在 sys.path 中查找的情况
+    if pdfium_dir not in sys.path:
+        sys.path.insert(0, pdfium_dir)
+
+
+_ensure_pdfium_dll()
+
+import re
+import io
+import json
+import pandas as pd
+from datetime import datetime
+import requests
+import time
+import warnings
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+
+# 禁用不安全请求的警告
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
+                             QLabel, QFileDialog, QProgressBar, QTextEdit, QSplitter,
+                             QGroupBox, QComboBox, QLineEdit, QMessageBox, QStatusBar,
+                             QInputDialog, QDialog, QScrollArea, QStackedWidget,
+                             QCheckBox, QDoubleSpinBox, QTabWidget)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QCoreApplication
+from PyQt5.QtGui import QPixmap, QColor, QBrush
+import pdfplumber
+import pytesseract
+from PIL import Image
+import cv2
+import numpy as np
+import shutil
+import matplotlib
+matplotlib.use('Qt5Agg')  # 使用Qt5后端
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+
+# 配置matplotlib中文字体
+# 尝试找到可用的中文字体
+chinese_fonts = ['Microsoft YaHei', 'SimHei', 'SimSun', 'KaiTi', 'FangSong', 
+                 'Arial Unicode MS', 'WenQuanYi Micro Hei', 'DejaVu Sans']
+available_fonts = [f.name for f in font_manager.fontManager.ttflist]
+chinese_font = None
+for font in chinese_fonts:
+    if font in available_fonts:
+        chinese_font = font
+        break
+
+if chinese_font:
+    plt.rcParams['font.sans-serif'] = [chinese_font] + plt.rcParams['font.sans-serif']
+else:
+    # 如果没有找到中文字体，使用默认设置
+    plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+# 配置文件路径
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'config.json')
+
+def load_config():
+    """加载配置文件"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"读取配置文件失败: {e}")
+    return {}
+
+def save_config(config):
+    """保存配置文件"""
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"保存配置文件失败: {e}")
+        return False
+
+
+def ocr_image_to_string(image):
+    """根据配置中设置的语言执行 OCR"""
+    cfg = load_config()
+    lang = cfg.get('ocr_lang', '') or None
+    if lang:
+        return pytesseract.image_to_string(image, lang=lang)
+    return pytesseract.image_to_string(image)
+
+def detect_tesseract_path():
+    """
+    自动检测 tesseract 可执行文件路径：
+    1. 配置文件中的路径（优先级最高）
+    2. 环境变量 TESSERACT_PATH
+    3. 程序目录下 Tesseract-OCR\\tesseract.exe（适合随程序一起打包）
+    4. 常见安装路径（Program Files 等）
+    5. 系统 PATH 中是否存在 tesseract
+    找不到则返回 None
+    """
+    # 1. 配置文件中的路径（优先级最高）
+    config = load_config()
+    config_path = config.get('tesseract_path', '')
+    if config_path and os.path.isfile(config_path):
+        return config_path
+    
+    # 2. 环境变量
+    env_path = os.environ.get("TESSERACT_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    # 2. 程序目录内的相对路径（兼容 PyInstaller 打包后的 _MEIPASS）
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.argv[0])))
+    candidates = [
+        os.path.join(base_dir, "Tesseract-OCR", "tesseract.exe"),
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+
+    # 3. PATH 中是否存在（用户自己装了并加到 PATH）
+    which_path = shutil.which("tesseract")
+    if which_path:
+        return which_path
+
+    return None
+
+
+def init_tesseract_or_warn(parent=None) -> bool:
+    """
+    初始化 Tesseract：
+    - 能找到时：设置 pytesseract 路径和 TESSDATA_PREFIX，返回 True
+    - 找不到时：弹出提示并返回 False
+    """
+    tesseract_path = detect_tesseract_path()
+    if tesseract_path:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        tessdir = os.path.dirname(tesseract_path)
+        os.environ["TESSDATA_PREFIX"] = tessdir
+        return True
+    else:
+        QMessageBox.warning(
+            parent,
+            "Tesseract 未找到",
+            "未能自动找到 Tesseract-OCR 程序。\n\n"
+            "请先安装 Tesseract-OCR，并将其路径写入环境变量 TESSERACT_PATH，\n"
+            "或与本软件同级目录放置 Tesseract-OCR 文件夹。"
+        )
+        return False
+
+class DeepSeekInvoiceAI:
+    """DeepSeek AI 发票分析助手"""
+    
+    def __init__(self, api_key=None, mock_mode=False):
+        # 优先级：传入的 api_key > 环境变量 > 配置文件 > 默认值
+        if api_key:
+            self.api_key = api_key
+        else:
+            # 尝试从环境变量获取
+            env_api_key = os.environ.get("DEEPSEEK_API_KEY")
+            if env_api_key:
+                self.api_key = env_api_key
+            else:
+                # 使用默认值（配置中的 API key 由调用方传入）
+                self.api_key = "sk-13580503d24340e092a5958a26a90114"
+        self.base_url = "https://api.deepseek.com/v1"
+        self.mock_mode = mock_mode
+        
+        # 创建带有重试机制的会话
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST", "GET"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+    
+    def _call_api(self, system_prompt, user_prompt):
+        """调用 DeepSeek API"""
+        if self.mock_mode:
+            return self._mock_response(user_prompt)
+        
+        try:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            
+            payload = {
+                "model": "deepseek-chat",
+                "messages": messages,
+                "temperature": 0.7,
+                "stream": False
+            }
+            
+            response = self.session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
+                verify=False
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"API请求失败: {response.status_code} {response.text}")
+            
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+            
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, 
+                requests.exceptions.Timeout) as e:
+            print(f"AI API错误: {str(e)}，使用模拟模式")
+            return self._mock_response(user_prompt)
+        except Exception as e:
+            raise Exception(f"调用DeepSeek API时出错: {str(e)}")
+    
+    def _mock_response(self, prompt):
+        """模拟响应"""
+        if "分析" in prompt:
+            return "【AI分析】这是一张正常的发票，建议检查商品明细是否完整。"
+        elif "审核" in prompt:
+            return "【AI审核】发票信息基本完整，建议核实金额是否正确。"
+        elif "建议" in prompt or "联想" in prompt:
+            return "【AI建议】建议添加'设备费'或'耗材'标签，并检查是否需要报销。"
+        return "【AI分析】请检查发票信息的完整性和准确性。"
+    
+    def analyze_invoice(self, invoice, all_invoices=None):
+        """
+        分析发票数据，提供智能分析
+        
+        参数:
+            invoice: 发票数据字典
+            all_invoices: 所有发票列表（用于对比分析）
+        
+        返回:
+            分析结果文本
+        """
+        # 构建发票信息摘要
+        invoice_summary = self._build_invoice_summary(invoice)
+        
+        # 构建上下文信息（如果有其他发票）
+        context = ""
+        if all_invoices:
+            total_count = len(all_invoices)
+            total_amount = sum(float(inv.get('total_amount', 0) or 0) for inv in all_invoices)
+            avg_amount = total_amount / total_count if total_count > 0 else 0
+            context = f"\n\n上下文信息：\n- 当前共有 {total_count} 张发票\n- 总金额：¥{total_amount:.2f}\n- 平均金额：¥{avg_amount:.2f}"
+            if invoice.get('total_amount', 0) > avg_amount * 1.5:
+                context += "\n- 注意：此发票金额高于平均值50%以上"
+        
+        system_prompt = """你是一个专业的发票分析助手。请对发票数据进行智能分析，包括：
+1. 发票信息的完整性评估
+2. 金额合理性分析
+3. 商品明细的合理性
+4. 潜在问题或异常情况
+5. 与同类发票的对比分析（如果有）
+
+请用简洁、专业的中文回答，突出重点问题和建议。"""
+        
+        user_prompt = f"请分析以下发票：\n\n{invoice_summary}{context}"
+        
+        try:
+            result = self._call_api(system_prompt, user_prompt)
+            return result
+        except Exception as e:
+            return f"分析失败：{str(e)}"
+    
+    def suggest_tags_and_actions(self, invoice, all_invoices=None):
+        """
+        为发票提供标签建议和操作建议
+        
+        参数:
+            invoice: 发票数据字典
+            all_invoices: 所有发票列表
+        
+        返回:
+            建议文本（包含标签建议和操作建议）
+        """
+        invoice_summary = self._build_invoice_summary(invoice)
+        
+        system_prompt = """你是一个发票管理助手。请根据发票内容提供：
+1. 合适的标签建议（如：设备费、耗材、差旅、报销等）
+2. 后续操作建议（如：是否需要报销、是否需要审核等）
+3. 分类建议（基于商品明细）
+
+请用简洁的中文回答，格式如下：
+【标签建议】：标签1、标签2、标签3
+【操作建议】：具体操作建议
+【分类建议】：分类建议"""
+        
+        user_prompt = f"请为以下发票提供标签和操作建议：\n\n{invoice_summary}"
+        
+        try:
+            result = self._call_api(system_prompt, user_prompt)
+            return result
+        except Exception as e:
+            return f"建议生成失败：{str(e)}"
+    
+    def review_invoice(self, invoice, validation_result=None):
+        """
+        AI审核发票信息，提供审核意见
+        
+        参数:
+            invoice: 发票数据字典
+            validation_result: 已有的验证结果（可选）
+        
+        返回:
+            审核意见文本
+        """
+        invoice_summary = self._build_invoice_summary(invoice)
+        
+        validation_info = ""
+        if validation_result:
+            errors = validation_result.get('errors', [])
+            warnings_list = validation_result.get('warnings', [])
+            if errors:
+                validation_info += f"\n\n已有验证错误：{', '.join(errors)}"
+            if warnings_list:
+                validation_info += f"\n已有验证警告：{', '.join(warnings_list)}"
+        
+        system_prompt = """你是一个发票审核专家。请对发票进行深度审核，包括：
+1. 发票信息的完整性和准确性
+2. 金额计算是否正确
+3. 商品明细是否合理
+4. 是否存在异常或可疑情况
+5. 是否符合报销要求
+
+请提供详细的审核意见，包括问题和改进建议。"""
+        
+        user_prompt = f"请审核以下发票：\n\n{invoice_summary}{validation_info}"
+        
+        try:
+            result = self._call_api(system_prompt, user_prompt)
+            return result
+        except Exception as e:
+            return f"审核失败：{str(e)}"
+    
+    def analyze_all_invoices(self, invoices):
+        """
+        分析所有发票，提供整体分析报告
+        
+        参数:
+            invoices: 发票列表
+        
+        返回:
+            分析报告文本
+        """
+        if not invoices:
+            return "暂无发票数据可供分析"
+        
+        # 构建统计信息
+        total_count = len(invoices)
+        total_amount = sum(float(inv.get('total_amount', 0) or 0) for inv in invoices)
+        avg_amount = total_amount / total_count if total_count > 0 else 0
+        
+        # 统计销售方
+        sellers = {}
+        for inv in invoices:
+            seller = inv.get('seller', '未知')
+            if seller not in sellers:
+                sellers[seller] = {'count': 0, 'amount': 0}
+            sellers[seller]['count'] += 1
+            sellers[seller]['amount'] += float(inv.get('total_amount', 0) or 0)
+        
+        # 统计标签
+        tags_count = {}
+        for inv in invoices:
+            for tag in inv.get('tags', []):
+                tags_count[tag] = tags_count.get(tag, 0) + 1
+        
+        # 构建摘要
+        summary = f"""发票统计摘要：
+- 发票总数：{total_count} 张
+- 总金额：¥{total_amount:.2f}
+- 平均金额：¥{avg_amount:.2f}
+- 主要销售方：{', '.join(list(sellers.keys())[:5])}
+- 主要标签：{', '.join(list(tags_count.keys())[:5]) if tags_count else '无'}"""
+        
+        system_prompt = """你是一个发票数据分析专家。请对发票数据提供整体分析，包括：
+1. 数据分布特征
+2. 异常情况识别
+3. 趋势分析
+4. 管理建议
+
+请用专业、简洁的中文回答。"""
+        
+        user_prompt = f"请分析以下发票数据：\n\n{summary}"
+        
+        try:
+            result = self._call_api(system_prompt, user_prompt)
+            return result
+        except Exception as e:
+            return f"分析失败：{str(e)}"
+    
+    def _build_invoice_summary(self, invoice):
+        """构建发票信息摘要"""
+        items_text = ""
+        items = invoice.get('items', [])
+        if items:
+            items_text = "\n商品明细：\n"
+            for i, item in enumerate(items[:10], 1):  # 最多显示10个商品
+                name = item.get('name', '')
+                amount = item.get('amount', 0)
+                category = item.get('category', '')
+                items_text += f"  {i}. {name} (分类: {category}, 金额: ¥{amount:.2f})\n"
+            if len(items) > 10:
+                items_text += f"  ... 还有 {len(items) - 10} 个商品\n"
+        
+        summary = f"""发票号码：{invoice.get('invoice_number', '未知')}
+开票日期：{invoice.get('date', '未知')}
+销售方：{invoice.get('seller', '未知')}
+购买方：{invoice.get('buyer', '未知')}
+总金额：¥{invoice.get('total_amount', 0):.2f}
+标签：{', '.join(invoice.get('tags', [])) if invoice.get('tags') else '无'}{items_text}"""
+        
+        return summary
+
+class InvoiceParser:
+    """发票解析器"""
+
+    def __init__(self):
+        self.category_mapping = {
+            '电子元件': '耗材',
+            '塑料制品': '耗材',
+            '碳纤维': '耗材',
+            'PCB': '耗材',
+            '线夹': '耗材',
+            '日用杂品': '其他',
+            '合计': '其他'
+        }
+
+        # 从配置中加载 OCR 语言设置，作为发票解析时的默认语言
+        cfg = load_config()
+        self.ocr_lang = cfg.get('ocr_lang', '') or None
+
+    def extract_text_from_pdf(self, pdf_path):
+        """从PDF中提取文本"""
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                text = ''
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + '\n'
+                return text
+        except Exception as e:
+            print(f"PDF解析错误 {pdf_path}: {e}")
+            return ""
+
+    def parse_invoice(self, pdf_path):
+        """解析发票信息"""
+        text = self.extract_text_from_pdf(pdf_path)
+        if not text:
+            return None
+
+        # 先解析明细
+        items = self.extract_items(text)
+
+        # 同时从文本中解析“价税合计（小写）”作为含税总金额
+        text_total = self.extract_total_amount(text)
+
+        # 优先使用文本中的价税合计（含税金额），没有时再使用明细金额之和
+        if text_total and text_total > 0:
+            total_amount = text_total
+        elif items:
+            items_total = sum(float(item.get('amount', 0) or 0) for item in items)
+            total_amount = round(items_total, 2)
+        else:
+            total_amount = 0.0
+
+        invoice_data = {
+            'invoice_number': self.extract_invoice_number(text),
+            'date': self.extract_date(text),
+            'seller': self.extract_seller(text),
+            'buyer': self.extract_buyer(text),
+            'items': items,
+            'total_amount': total_amount,
+            'file_path': pdf_path,
+            'tags': [],  # 初始化标签为空列表
+            'validation': None  # 验证结果，将在验证时填充
+        }
+
+        return invoice_data
+    
+    def validate_invoice(self, invoice, all_invoices=None):
+        """
+        验证发票数据的完整性和正确性
+        返回验证结果字典，包含：
+        - is_valid: 是否通过验证
+        - errors: 错误列表
+        - warnings: 警告列表
+        """
+        errors = []
+        warnings = []
+        
+        # 1. 必填字段检查
+        if not invoice.get('invoice_number') or invoice.get('invoice_number', '').strip() == '':
+            errors.append('发票号码为空')
+        
+        if not invoice.get('date') or invoice.get('date', '').strip() == '':
+            errors.append('开票日期为空')
+        
+        if not invoice.get('seller') or invoice.get('seller', '').strip() == '':
+            warnings.append('销售方为空')
+        
+        buyer = (invoice.get('buyer') or '').strip()
+        if not buyer:
+            warnings.append('购买方为空')
+        else:
+            # 购买方抬头校验：与配置中的 buyer_expected_name 对比
+            cfg = load_config()
+            expected_buyer = (cfg.get('buyer_expected_name') or '苏州大学').strip()
+            if expected_buyer and buyer != expected_buyer:
+                # 抬头不一致按“错误”处理，便于筛查
+                errors.append(f'购买方抬头不匹配，当前为“{buyer}”，期望为“{expected_buyer}”')
+        
+        # 2. 金额校验
+        total_amount = invoice.get('total_amount', 0)
+        items = invoice.get('items', [])
+        
+        if total_amount <= 0:
+            errors.append('总金额无效（≤0）')
+        
+        if items:
+            # 计算明细金额总和
+            items_total = 0.0
+            for item in items:
+                try:
+                    # 使用含税金额（如果有）
+                    amount = float(item.get('amount', 0) or 0)
+                    tax = float(item.get('tax_amount', 0) or 0)
+                    items_total += amount + tax
+                except (ValueError, TypeError):
+                    pass
+            
+            # 允许一定的误差（0.01元），因为可能有四舍五入
+            if abs(items_total - total_amount) > 0.01:
+                if abs(items_total - total_amount) > 1.0:
+                    errors.append(f'明细金额总和（¥{items_total:.2f}）与总金额（¥{total_amount:.2f}）不一致，差异：¥{abs(items_total - total_amount):.2f}')
+                else:
+                    warnings.append(f'明细金额总和（¥{items_total:.2f}）与总金额（¥{total_amount:.2f}）有轻微差异：¥{abs(items_total - total_amount):.2f}')
+        else:
+            warnings.append('没有商品明细')
+        
+        # 3. 发票号重复检测（如果提供了所有发票列表）
+        if all_invoices is not None:
+            invoice_number = invoice.get('invoice_number', '').strip()
+            if invoice_number:
+                duplicate_count = sum(1 for inv in all_invoices 
+                                    if inv.get('invoice_number', '').strip() == invoice_number 
+                                    and inv.get('file_path') != invoice.get('file_path'))
+                if duplicate_count > 0:
+                    errors.append(f'发票号重复（发现 {duplicate_count} 张相同发票号的发票）')
+        
+        # 4. 文件路径检查
+        file_path = invoice.get('file_path', '')
+        if not file_path:
+            errors.append('文件路径为空')
+        elif not os.path.exists(file_path):
+            errors.append(f'文件不存在：{file_path}')
+        
+        # 5. 商品明细检查
+        for idx, item in enumerate(items, 1):
+            if not item.get('name') or not item.get('name', '').strip():
+                warnings.append(f'第 {idx} 项商品名称为空')
+            
+            try:
+                quantity = float(item.get('quantity', 0) or 0)
+                price = float(item.get('price', 0) or 0)
+                amount = float(item.get('amount', 0) or 0)
+                
+                if quantity <= 0:
+                    warnings.append(f'第 {idx} 项商品数量无效（≤0）')
+                if price < 0:
+                    warnings.append(f'第 {idx} 项商品单价为负')
+                if amount < 0:
+                    warnings.append(f'第 {idx} 项商品金额为负')
+                
+                # 检查数量×单价是否等于金额（允许小误差）
+                expected_amount = quantity * price
+                if abs(expected_amount - amount) > 0.01:
+                    warnings.append(f'第 {idx} 项商品：数量×单价（{quantity}×{price:.2f}={expected_amount:.2f}）与金额（{amount:.2f}）不一致')
+            except (ValueError, TypeError):
+                warnings.append(f'第 {idx} 项商品数值格式错误')
+        
+        # 返回验证结果
+        is_valid = len(errors) == 0
+        validation_result = {
+            'is_valid': is_valid,
+            'errors': errors,
+            'warnings': warnings,
+            'checked_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        return validation_result
+
+    def extract_invoice_number(self, text):
+        """提取发票号码"""
+        patterns = [
+            r'发票号码[：:]\s*(\d+)',
+            r'发票号[：:]\s*(\d+)',
+            r'(\d{20})',  # 20位数字发票号
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+        return ""
+
+    def extract_date(self, text):
+        """提取开票日期"""
+        patterns = [
+            r'开票日期[：:]\s*(\d{4}年\d{1,2}月\d{1,2}日)',
+            r'(\d{4}年\d{1,2}月\d{1,2}日)',
+            r'(\d{4}-\d{1,2}-\d{1,2})',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+        return ""
+
+    def extract_seller(self, text):
+        """提取销售方"""
+        patterns = [
+            r'销\s*名称[：:]\s*([^\n]+)',
+            r'销方[：:]\s*([^\n]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    def extract_buyer(self, text):
+        """提取购买方"""
+        patterns = [
+            r'购\s*名称[：:]\s*([^销\n]+)',
+            r'购方[：:]\s*([^销\n]+)',
+            r'名称[：:]\s*([^\n]*?)\s*销\s*名称',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                buyer = match.group(1).strip()
+                # 清理可能的杂质
+                buyer = re.sub(r'销\s*名称.*', '', buyer)
+                return buyer.strip()
+        return ""
+
+    def extract_items(self, text):
+        """提取商品明细"""
+        # 直接使用精确的解析方法
+        return self.extract_items_alternative(text)
+
+    def extract_items_alternative(self, text):
+        """替代的商品明细提取方法"""
+        items = []
+
+        # 精确匹配电子发票的商品行格式
+        # 格式：项目名称 规格型号 单位 数量 单价 金额 税率 税额
+        lines = text.split('\n')
+
+        for line in lines:
+            line = line.strip()
+
+            # 查找包含*的项目行，但排除表头和汇总行
+            if '*' in line and not any(keyword in line for keyword in ['合计', '价税合计']):
+                # 分割行内容
+                parts = re.split(r'\s+', line)
+
+                # 我们不再强依赖固定位置，而是：
+                # 1. 找到第一个包含“%”的字段（税率）
+                # 2. 在税率之前，最后一个数字视为“金额”，倒数第二个数字视为“单价”，再往前一个视为“数量”（如果存在）
+                try:
+                    percent_idx = None
+                    for i, p in enumerate(parts):
+                        if '%' in p:
+                            percent_idx = i
+                            break
+
+                    search_end = percent_idx if percent_idx is not None else len(parts)
+
+                    numeric_indices = []
+                    for i, p in enumerate(parts[:search_end]):
+                        try:
+                            v = float(p)
+                            numeric_indices.append((i, v))
+                        except ValueError:
+                            continue
+
+                    if not numeric_indices:
+                        # 没有数字，放弃本行
+                        continue
+
+                    # 金额（未税）：税率前最后一个数字
+                    amount_idx, amount_no_tax = numeric_indices[-1]
+
+                    # 单价：金额前一个数字（如果有），否则与金额相同。
+                    # 对于只有两个数字且第一个明显异常（如 1202.65 与 202.65），
+                    # 直接认为单价等于金额，前面的数字视为噪声。
+                    if len(numeric_indices) >= 2:
+                        if len(numeric_indices) == 2:
+                            price_idx, price_no_tax = amount_idx, amount_no_tax
+                        else:
+                            price_idx, price_no_tax = numeric_indices[-2]
+                    else:
+                        price_idx, price_no_tax = amount_idx, amount_no_tax
+
+                    # 数量：再往前一个数字（如果有），否则根据 金额/单价 估算或默认为 1
+                    if len(numeric_indices) >= 3:
+                        qty_idx, quantity = numeric_indices[-3]
+                    else:
+                        quantity = 1.0
+                        if price_no_tax > 0:
+                            est_qty = amount_no_tax / price_no_tax
+                            # 如果接近整数，则采用估算数量
+                            if abs(est_qty - round(est_qty)) < 1e-3:
+                                quantity = float(round(est_qty))
+
+                    # 税额：在税率字段之后的第一个数字
+                    tax_amount = 0.0
+                    if percent_idx is not None and percent_idx + 1 < len(parts):
+                        for p in parts[percent_idx + 1:]:
+                            try:
+                                tax_amount = float(p)
+                                break
+                            except ValueError:
+                                continue
+
+                    # 含税金额 / 单价
+                    amount_with_tax = amount_no_tax + tax_amount
+                    price_with_tax = amount_with_tax / quantity if quantity not in (0, None) else amount_with_tax
+
+                    # 如果是折扣行（金额为负），不希望出现负单价：
+                    # - 单价设为金额的绝对值
+                    # - 数量固定为 1（表示一笔折扣）
+                    # 这样在界面中看到的是“单价为正，金额为负”的折扣行，更符合直觉。
+                    if amount_with_tax < 0:
+                        price_with_tax = abs(amount_with_tax)
+                        quantity = 1.0
+
+                    # 单位：第一个数字前一个字段通常是单位，例如 “… 个 3 2.27 6.83 …”
+                    first_num_idx = numeric_indices[0][0]
+                    unit_idx = first_num_idx - 1
+                    unit = '个'
+                    if unit_idx >= 0:
+                        unit = parts[unit_idx]
+
+                    # 商品名称：单位之前的所有字段
+                    name_parts = parts[:unit_idx] if unit_idx > 0 else parts[:amount_idx]
+                    product_name = ' '.join(name_parts).strip()
+
+                    # 规格：简单取名称中的第二段作为规格（如果存在）
+                    spec = ''
+                    if len(name_parts) > 1:
+                        spec = name_parts[-1]
+
+                    category = self.auto_categorize(product_name)
+
+                    # 折扣行在名称后面加上“（折扣）”以便识别
+                    if amount_with_tax < 0 or '优惠' in line:
+                        product_name = (product_name + '（折扣）').strip()
+
+                    item = {
+                        'category': category,
+                        'name': product_name,
+                        'unit': unit,
+                        'quantity': quantity,
+                        # 对外暴露的单价/金额全部为“含税价”
+                        'price': price_with_tax,
+                        'amount': amount_with_tax,
+                        'spec': spec
+                    }
+                    items.append(item)
+
+                except Exception:
+                    # 如果解析失败，尝试简单解析
+                    self.parse_item_simple(line, items)
+
+        return items
+
+    def parse_item_simple(self, line, items):
+        """简单解析商品行（作为备用方法）"""
+        if '*' in line:
+            parts = line.split()
+            name_part = None
+            amount_part = None
+
+            for part in parts:
+                if '*' in part:
+                    name_part = part
+                # 查找金额（跳过税额，找较大的金额）
+                if re.match(r'^\d+\.?\d*$', part):
+                    try:
+                        value = float(part)
+                        if value > 0 and (amount_part is None or value > amount_part):
+                            amount_part = value
+                    except:
+                        continue
+
+            if name_part and amount_part:
+                category = self.auto_categorize(name_part)
+                items.append({
+                    'category': category,
+                    'name': name_part,
+                    'unit': '个',
+                    'quantity': 1.0,
+                    'price': amount_part,
+                    'amount': amount_part,
+                    'spec': ''
+                })
+
+    def parse_item_line(self, line):
+        """解析商品行"""
+        # 使用正则表达式分割可能的商品信息
+        # 匹配模式：项目名称 规格型号 单位 数量 单价 金额 税率 税额
+
+        # 简化解析，查找包含*的商品名称和金额
+        if '*' in line:
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    # 尝试找到商品名称（包含*的）和金额
+                    name_part = None
+                    amount_part = None
+
+                    for part in parts:
+                        if '*' in part:
+                            name_part = part
+                        # 查找金额（包含数字和小数点）
+                        if re.match(r'^\d+\.?\d*$', part):
+                            amount_part = float(part)
+
+                    if name_part and amount_part:
+                        # 自动分类
+                        category = self.auto_categorize(name_part)
+
+                        return {
+                            'category': category,
+                            'name': name_part,
+                            'unit': '个',  # 默认单位
+                            'quantity': 1.0,  # 默认数量
+                            'price': amount_part,
+                            'amount': amount_part,
+                            'spec': ''  # 规格型号
+                        }
+                except:
+                    pass
+
+        return None
+
+    def auto_categorize(self, product_name):
+        """自动分类商品"""
+        for keyword, category in self.category_mapping.items():
+            if keyword in product_name:
+                return category
+        return '其他'
+
+    def extract_total_amount(self, text):
+        """提取总金额"""
+        # 这里只取“价税合计（小写）”对应的含税金额，避免误抓到前面的“合计（未税金额）”
+        patterns = [
+            r'价税合计.*?[（(]小写[）)]\s*¥?\s*(\d+\.?\d*)',
+            r'价税合计[：:]\s*¥?\s*(\d+\.?\d*)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    return float(match.group(1))
+                except:
+                    continue
+        return 0.0
+
+
+class InvoiceProcessor(QThread):
+    """发票处理线程"""
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, pdf_files):
+        super().__init__()
+        self.pdf_files = pdf_files
+        self.parser = InvoiceParser()
+
+    def run(self):
+        """处理发票文件"""
+        invoices = []
+
+        for i, pdf_file in enumerate(self.pdf_files):
+            try:
+                invoice = self.parser.parse_invoice(pdf_file)
+                if invoice:
+                    invoices.append(invoice)
+                self.progress.emit(int((i + 1) / len(self.pdf_files) * 100))
+            except Exception as e:
+                self.error.emit(f"处理文件 {pdf_file} 时出错: {str(e)}")
+
+        self.finished.emit(invoices)
+
+
+class PurchaseRecordMatcher(QThread):
+    """购买记录 OCR 匹配与重命名线程"""
+
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, folder, files, invoices):
+        super().__init__()
+        self.folder = folder
+        self.files = files
+        self.invoices = invoices or []
+
+    # ---------------- 内部工具方法，与界面完全解耦，仅做计算 ----------------
+    def _extract_paid_amount_from_image(self, img_path):
+        """从图片中识别实付金额，仅用于线程内部调用"""
+        try:
+            image = Image.open(img_path)
+        except Exception as e:
+            print(f"OCR 打开图片失败 {img_path}: {e}")
+            return None
+
+        try:
+            text = ocr_image_to_string(image)
+        except Exception as e:
+            print(f"OCR 识别失败 {img_path}: {e}")
+            return None
+
+        if not text:
+            return None
+
+        lines = text.splitlines()
+        amount_pattern = re.compile(r'([0-9]+(?:\.[0-9]{1,2})?)')
+
+        keywords = ['实付', '实收', '实付金额', '支付金额', '应付金额', '合计', '总计']
+        candidate_amounts = []
+
+        for line in lines:
+            if any(k in line for k in keywords):
+                for m in amount_pattern.finditer(line.replace(',', '')):
+                    try:
+                        val = float(m.group(1))
+                        candidate_amounts.append(val)
+                    except ValueError:
+                        continue
+
+        if candidate_amounts:
+            return max(candidate_amounts)
+
+        all_amounts = []
+        for line in lines:
+            for m in amount_pattern.finditer(line.replace(',', '')):
+                try:
+                    val = float(m.group(1))
+                    all_amounts.append(val)
+                except ValueError:
+                    continue
+
+        if all_amounts:
+            return max(all_amounts)
+
+        return None
+
+    def _find_invoice_by_amount(self, amount, tol=0.01):
+        """根据金额在发票列表中匹配发票"""
+        if amount is None:
+            return None
+
+        # 从配置中读取匹配金额容差设置
+        cfg = load_config()
+        tol = float(cfg.get('match_tolerance', tol) or tol)
+
+        for inv in self.invoices:
+            try:
+                inv_amount = float(inv.get('total_amount', 0) or 0)
+            except Exception:
+                continue
+
+            if abs(inv_amount - amount) <= tol:
+                return inv
+
+        return None
+
+    # ---------------- 线程主流程 ----------------
+    def run(self):
+        matched_count = 0
+        unmatched_files = []
+        error_files = []
+
+        total = len(self.files) if self.files else 0
+        if total == 0:
+            self.finished.emit({
+                "total": 0,
+                "matched": 0,
+                "unmatched_files": [],
+                "error_files": [],
+                "folder": self.folder,
+            })
+            return
+
+        try:
+            for i, img_path in enumerate(self.files):
+                try:
+                    paid_amount = self._extract_paid_amount_from_image(img_path)
+                    if paid_amount is None:
+                        unmatched_files.append(os.path.basename(img_path))
+                    else:
+                        invoice = self._find_invoice_by_amount(paid_amount)
+                        if not invoice:
+                            unmatched_files.append(os.path.basename(img_path))
+                        else:
+                            inv_no = (invoice.get('invoice_number') or '').strip() or 'NOINVNO'
+                            new_name = f"{inv_no}_{paid_amount:.2f}_{os.path.basename(img_path)}"
+                            new_path = os.path.join(self.folder, new_name)
+
+                            counter = 1
+                            base_new_name, ext = os.path.splitext(new_name)
+                            while os.path.exists(new_path):
+                                new_name = f"{base_new_name}_{counter}{ext}"
+                                new_path = os.path.join(self.folder, new_name)
+                                counter += 1
+
+                            os.rename(img_path, new_path)
+                            matched_count += 1
+                except Exception:
+                    error_files.append(os.path.basename(img_path))
+
+                self.progress.emit(int((i + 1) / total * 100))
+
+        except Exception as e:
+            self.error.emit(str(e))
+            return
+
+        self.finished.emit({
+            "total": total,
+            "matched": matched_count,
+            "unmatched_files": unmatched_files,
+            "error_files": error_files,
+            "folder": self.folder,
+        })
+
+class AIWorker(QThread):
+    """AI 处理工作线程，避免阻塞UI"""
+    finished = pyqtSignal(str)  # 传递结果
+    error = pyqtSignal(str)  # 传递错误信息
+    
+    def __init__(self, ai_client, method_name, *args, **kwargs):
+        super().__init__()
+        self.ai_client = ai_client
+        self.method_name = method_name
+        self.args = args
+        self.kwargs = kwargs
+    
+    def run(self):
+        """在后台线程中执行AI调用"""
+        try:
+            method = getattr(self.ai_client, self.method_name)
+            result = method(*self.args, **self.kwargs)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class AIWorker(QThread):
+    """AI 处理工作线程，避免阻塞UI"""
+    finished = pyqtSignal(str)  # 传递结果
+    error = pyqtSignal(str)  # 传递错误信息
+    
+    def __init__(self, ai_client, method_name, *args, **kwargs):
+        super().__init__()
+        self.ai_client = ai_client
+        self.method_name = method_name
+        self.args = args
+        self.kwargs = kwargs
+    
+    def run(self):
+        """在后台线程中执行AI调用"""
+        try:
+            method = getattr(self.ai_client, self.method_name)
+            result = method(*self.args, **self.kwargs)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class InvoicePreviewDialog(QDialog):
+    """发票预览对话框，在软件内部滚动查看PDF第一页"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('发票预览')
+        # 适当大一点，方便阅读
+        self.resize(900, 1000)
+
+        layout = QVBoxLayout(self)
+        
+        # 工具栏
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(6)
+        
+        self.zoom_in_btn = QPushButton('🔍+ 放大')
+        self.zoom_in_btn.setProperty('btnType', 'ghost')
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        toolbar_layout.addWidget(self.zoom_in_btn)
+        
+        self.zoom_out_btn = QPushButton('🔍- 缩小')
+        self.zoom_out_btn.setProperty('btnType', 'ghost')
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        toolbar_layout.addWidget(self.zoom_out_btn)
+        
+        self.zoom_reset_btn = QPushButton('↺ 重置')
+        self.zoom_reset_btn.setProperty('btnType', 'ghost')
+        self.zoom_reset_btn.clicked.connect(self.zoom_reset)
+        toolbar_layout.addWidget(self.zoom_reset_btn)
+        
+        self.zoom_label = QLabel('100%')
+        self.zoom_label.setMinimumWidth(50)
+        toolbar_layout.addWidget(self.zoom_label)
+        
+        toolbar_layout.addStretch(1)
+        layout.addLayout(toolbar_layout)
+
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        # 启用鼠标滚轮缩放
+        self.scroll_area.wheelEvent = self.wheel_event_handler
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.scroll_area.setWidget(self.image_label)
+
+        layout.addWidget(self.scroll_area)
+        
+        # 初始化
+        self.original_pixmap = None
+        self.zoom_factor = 1.0
+
+    def set_pixmap(self, pixmap: QPixmap):
+        """设置要显示的发票图片"""
+        self.original_pixmap = pixmap
+        self.zoom_factor = 1.0
+        self._update_display()
+    
+    def _update_display(self):
+        """更新显示"""
+        if not self.original_pixmap:
+            return
+        
+        # 根据缩放比例计算尺寸
+        original_size = self.original_pixmap.size()
+        scaled_width = int(original_size.width() * self.zoom_factor)
+        scaled_height = int(original_size.height() * self.zoom_factor)
+        
+        scaled_pixmap = self.original_pixmap.scaled(
+            scaled_width,
+            scaled_height,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled_pixmap)
+        self.image_label.adjustSize()
+        
+        # 更新缩放比例显示
+        zoom_percent = int(self.zoom_factor * 100)
+        self.zoom_label.setText(f'{zoom_percent}%')
+    
+    def zoom_in(self):
+        """放大"""
+        if self.original_pixmap:
+            self.zoom_factor = min(self.zoom_factor * 1.2, 5.0)  # 最大5倍
+            self._update_display()
+    
+    def zoom_out(self):
+        """缩小"""
+        if self.original_pixmap:
+            self.zoom_factor = max(self.zoom_factor / 1.2, 0.2)  # 最小0.2倍
+            self._update_display()
+    
+    def zoom_reset(self):
+        """重置缩放"""
+        if self.original_pixmap:
+            self.zoom_factor = 1.0
+            self._update_display()
+    
+    def wheel_event_handler(self, event):
+        """鼠标滚轮事件：Ctrl+滚轮缩放"""
+        if event.modifiers() == Qt.ControlModifier and self.original_pixmap:
+            # Ctrl + 滚轮缩放
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_in()
+            else:
+                self.zoom_out()
+        else:
+            # 普通滚轮滚动
+            QScrollArea.wheelEvent(self.scroll_area, event)
+
+
+class SettingsDialog(QDialog):
+    """设置对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('设置')
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.setMinimumHeight(600)
+        self.resize(560, 700)  # 设置合适的初始大小
+        
+        # 主布局
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        
+        # 创建内容部件
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # ========== Tesseract OCR 路径设置 ==========
+        tesseract_group = QGroupBox('Tesseract OCR 配置')
+        tesseract_layout = QVBoxLayout(tesseract_group)
+        
+        desc_label = QLabel('请选择 Tesseract-OCR 的可执行文件路径（tesseract.exe）：')
+        desc_label.setWordWrap(True)
+        tesseract_layout.addWidget(desc_label)
+        
+        path_layout = QHBoxLayout()
+        self.tesseract_path_edit = QLineEdit()
+        self.tesseract_path_edit.setPlaceholderText('例如：C:\\Program Files\\Tesseract-OCR\\tesseract.exe')
+        
+        # 加载当前配置
+        config = load_config()
+        current_path = config.get('tesseract_path', '')
+        if current_path:
+            self.tesseract_path_edit.setText(current_path)
+        else:
+            # 尝试自动检测并显示
+            auto_path = detect_tesseract_path()
+            if auto_path:
+                self.tesseract_path_edit.setText(auto_path)
+        
+        path_layout.addWidget(self.tesseract_path_edit)
+        
+        browse_btn = QPushButton('浏览...')
+        browse_btn.clicked.connect(self.browse_tesseract_path)
+        path_layout.addWidget(browse_btn)
+        
+        tesseract_layout.addLayout(path_layout)
+        
+        # 测试按钮
+        test_btn = QPushButton('测试路径')
+        test_btn.clicked.connect(self.test_tesseract_path)
+        tesseract_layout.addWidget(test_btn)
+        
+        layout.addWidget(tesseract_group)
+
+        # ========== OCR / 匹配行为设置 ==========
+        behavior_group = QGroupBox('识别与匹配行为')
+        behavior_layout = QVBoxLayout(behavior_group)
+
+        # OCR 语言
+        ocr_lang_layout = QHBoxLayout()
+        ocr_lang_label = QLabel('OCR 语言：')
+        self.ocr_lang_combo = QComboBox()
+        self.ocr_lang_combo.addItem('自动（不指定，默认识别）', '')
+        self.ocr_lang_combo.addItem('中文 + 英文（chi_sim+eng）', 'chi_sim+eng')
+        self.ocr_lang_combo.addItem('仅中文（chi_sim）', 'chi_sim')
+        self.ocr_lang_combo.addItem('仅英文（eng）', 'eng')
+
+        current_ocr_lang = config.get('ocr_lang', '')
+        index = self.ocr_lang_combo.findData(current_ocr_lang)
+        if index >= 0:
+            self.ocr_lang_combo.setCurrentIndex(index)
+
+        ocr_lang_layout.addWidget(ocr_lang_label)
+        ocr_lang_layout.addWidget(self.ocr_lang_combo)
+        behavior_layout.addLayout(ocr_lang_layout)
+
+        # 启动时自动加载上次发票
+        self.auto_load_checkbox = QCheckBox('启动时自动加载上次保存的发票数据')
+        self.auto_load_checkbox.setChecked(config.get('auto_load_invoices', True))
+        behavior_layout.addWidget(self.auto_load_checkbox)
+
+        # 匹配金额容差
+        match_tol_layout = QHBoxLayout()
+        match_tol_label = QLabel('匹配金额容差：')
+        self.match_tol_spin = QDoubleSpinBox()
+        self.match_tol_spin.setRange(0.00, 10.00)
+        self.match_tol_spin.setDecimals(2)
+        self.match_tol_spin.setSingleStep(0.01)
+        self.match_tol_spin.setSuffix(' 元')
+        self.match_tol_spin.setValue(float(config.get('match_tolerance', 0.01) or 0.01))
+
+        match_tol_layout.addWidget(match_tol_label)
+        match_tol_layout.addWidget(self.match_tol_spin)
+        behavior_layout.addLayout(match_tol_layout)
+
+        layout.addWidget(behavior_group)
+        
+        # ========== 数据管理设置 ==========
+        data_group = QGroupBox('数据管理')
+        data_layout = QVBoxLayout(data_group)
+        
+        # 自动备份
+        backup_layout = QHBoxLayout()
+        self.auto_backup_checkbox = QCheckBox('启用自动备份')
+        self.auto_backup_checkbox.setChecked(config.get('auto_backup', False))
+        backup_layout.addWidget(self.auto_backup_checkbox)
+        
+        backup_interval_label = QLabel('备份间隔（天）：')
+        self.backup_interval_spin = QDoubleSpinBox()
+        self.backup_interval_spin.setRange(1, 30)
+        self.backup_interval_spin.setDecimals(0)
+        self.backup_interval_spin.setValue(float(config.get('backup_interval', 7) or 7))
+        self.backup_interval_spin.setEnabled(self.auto_backup_checkbox.isChecked())
+        self.auto_backup_checkbox.toggled.connect(self.backup_interval_spin.setEnabled)
+        
+        backup_layout.addWidget(backup_interval_label)
+        backup_layout.addWidget(self.backup_interval_spin)
+        backup_layout.addStretch(1)
+        data_layout.addLayout(backup_layout)
+        
+        # 默认备份路径
+        backup_path_layout = QHBoxLayout()
+        backup_path_label = QLabel('默认备份路径：')
+        self.backup_path_edit = QLineEdit()
+        self.backup_path_edit.setPlaceholderText('留空则使用程序目录')
+        backup_path = config.get('backup_path', '')
+        if backup_path:
+            self.backup_path_edit.setText(backup_path)
+        
+        backup_path_layout.addWidget(backup_path_label)
+        backup_path_layout.addWidget(self.backup_path_edit)
+        
+        backup_browse_btn = QPushButton('浏览...')
+        backup_browse_btn.clicked.connect(self.browse_backup_path)
+        backup_path_layout.addWidget(backup_browse_btn)
+        data_layout.addLayout(backup_path_layout)
+        
+        layout.addWidget(data_group)
+        
+        # ========== 导出设置 ==========
+        export_group = QGroupBox('导出设置')
+        export_layout = QVBoxLayout(export_group)
+        
+        # 默认导出路径
+        export_path_layout = QHBoxLayout()
+        export_path_label = QLabel('默认导出路径：')
+        self.export_path_edit = QLineEdit()
+        self.export_path_edit.setPlaceholderText('留空则每次询问')
+        export_path = config.get('export_path', '')
+        if export_path:
+            self.export_path_edit.setText(export_path)
+        
+        export_path_layout.addWidget(export_path_label)
+        export_path_layout.addWidget(self.export_path_edit)
+        
+        export_browse_btn = QPushButton('浏览...')
+        export_browse_btn.clicked.connect(self.browse_export_path)
+        export_path_layout.addWidget(export_browse_btn)
+        export_layout.addLayout(export_path_layout)
+        
+        # 导出时包含验证信息
+        self.include_validation_checkbox = QCheckBox('导出时包含验证信息')
+        self.include_validation_checkbox.setChecked(config.get('export_include_validation', True))
+        export_layout.addWidget(self.include_validation_checkbox)
+        
+        layout.addWidget(export_group)
+        
+        # ========== 验证设置 ==========
+        validation_group = QGroupBox('验证设置')
+        validation_layout = QVBoxLayout(validation_group)
+        
+        # 导入时自动验证
+        self.auto_validate_checkbox = QCheckBox('导入发票时自动验证')
+        self.auto_validate_checkbox.setChecked(config.get('auto_validate', True))
+        validation_layout.addWidget(self.auto_validate_checkbox)
+        
+        # 验证严格程度
+        strict_layout = QHBoxLayout()
+        strict_label = QLabel('验证严格程度：')
+        self.validation_strict_combo = QComboBox()
+        self.validation_strict_combo.addItem('宽松（仅检查严重错误）', 'loose')
+        self.validation_strict_combo.addItem('标准（检查错误和重要警告）', 'normal')
+        self.validation_strict_combo.addItem('严格（检查所有问题）', 'strict')
+        
+        strict_level = config.get('validation_strictness', 'normal')
+        index = self.validation_strict_combo.findData(strict_level)
+        if index >= 0:
+            self.validation_strict_combo.setCurrentIndex(index)
+        
+        strict_layout.addWidget(strict_label)
+        strict_layout.addWidget(self.validation_strict_combo)
+        validation_layout.addLayout(strict_layout)
+        
+        layout.addWidget(validation_group)
+        
+        # ========== 抬头设置 ==========
+        ui_group = QGroupBox('抬头/界面设置')
+        ui_layout = QVBoxLayout(ui_group)
+        
+        # 发票抬头校验名称
+        buyer_layout = QHBoxLayout()
+        buyer_label = QLabel('期望购买方抬头：')
+        self.buyer_expected_edit = QLineEdit()
+        self.buyer_expected_edit.setPlaceholderText('例如：苏州大学')
+        self.buyer_expected_edit.setText(config.get('buyer_expected_name', '苏州大学'))
+        buyer_layout.addWidget(buyer_label)
+        buyer_layout.addWidget(self.buyer_expected_edit)
+        ui_layout.addLayout(buyer_layout)
+        
+        # 发票列表显示项
+        list_display_layout = QHBoxLayout()
+        list_display_label = QLabel('列表显示：')
+        self.show_tags_checkbox = QCheckBox('显示标签')
+        self.show_tags_checkbox.setChecked(config.get('list_show_tags', True))
+        self.show_validation_checkbox = QCheckBox('显示验证状态')
+        self.show_validation_checkbox.setChecked(config.get('list_show_validation', True))
+        
+        list_display_layout.addWidget(list_display_label)
+        list_display_layout.addWidget(self.show_tags_checkbox)
+        list_display_layout.addWidget(self.show_validation_checkbox)
+        list_display_layout.addStretch(1)
+        ui_layout.addLayout(list_display_layout)
+        
+        layout.addWidget(ui_group)
+        
+        # ========== 其他设置 ==========
+        other_group = QGroupBox('其他设置')
+        other_layout = QVBoxLayout(other_group)
+        
+        # 保存时显示提示
+        self.show_save_prompt_checkbox = QCheckBox('保存数据时显示提示')
+        self.show_save_prompt_checkbox.setChecked(config.get('show_save_prompt', True))
+        other_layout.addWidget(self.show_save_prompt_checkbox)
+        
+        # 删除前确认
+        self.confirm_delete_checkbox = QCheckBox('删除发票前确认')
+        self.confirm_delete_checkbox.setChecked(config.get('confirm_delete', True))
+        other_layout.addWidget(self.confirm_delete_checkbox)
+        
+        layout.addWidget(other_group)
+        
+        # ========== AI 设置 ==========
+        ai_group = QGroupBox('AI 分析设置')
+        ai_layout = QVBoxLayout(ai_group)
+        
+        # API Key 输入
+        api_key_desc = QLabel('DeepSeek API Key（用于 AI 发票分析和审核功能）：')
+        api_key_desc.setWordWrap(True)
+        ai_layout.addWidget(api_key_desc)
+        
+        api_key_layout = QHBoxLayout()
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText('输入 DeepSeek API Key，留空则使用默认值')
+        self.api_key_edit.setEchoMode(QLineEdit.Password)  # 隐藏输入
+        
+        # 加载当前配置
+        current_api_key = config.get('deepseek_api_key', '')
+        if current_api_key:
+            self.api_key_edit.setText(current_api_key)
+        
+        api_key_layout.addWidget(self.api_key_edit)
+        
+        # 显示/隐藏密码按钮
+        toggle_password_btn = QPushButton('👁')
+        toggle_password_btn.setMaximumWidth(40)
+        toggle_password_btn.setCheckable(True)
+        toggle_password_btn.setToolTip('显示/隐藏 API Key')
+        toggle_password_btn.toggled.connect(lambda checked: self.api_key_edit.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password))
+        api_key_layout.addWidget(toggle_password_btn)
+        
+        ai_layout.addLayout(api_key_layout)
+        
+        # API Key 说明
+        api_key_hint = QLabel('提示：可在 https://platform.deepseek.com/ 获取 API Key')
+        api_key_hint.setStyleSheet('color: #666; font-size: 9pt;')
+        api_key_hint.setWordWrap(True)
+        ai_layout.addWidget(api_key_hint)
+        
+        layout.addWidget(ai_group)
+        
+        # 添加拉伸，确保内容从顶部开始
+        layout.addStretch(1)
+        
+        # 将内容部件设置到滚动区域
+        scroll_area.setWidget(content_widget)
+        
+        # 将滚动区域添加到主布局
+        main_layout.addWidget(scroll_area)
+        
+        # 按钮区域（固定在底部，不参与滚动）
+        button_container = QWidget()
+        button_container.setStyleSheet('background-color: #ffffff; border-top: 1px solid #e5e7eb;')
+        button_layout = QHBoxLayout(button_container)
+        button_layout.setContentsMargins(15, 10, 15, 10)
+        button_layout.setSpacing(10)
+        button_layout.addStretch(1)
+        
+        ok_btn = QPushButton('确定')
+        ok_btn.setProperty('btnType', 'primary')
+        ok_btn.setMinimumWidth(80)
+        ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton('取消')
+        cancel_btn.setMinimumWidth(80)
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        # 将按钮容器添加到主布局
+        main_layout.addWidget(button_container)
+    
+    def browse_tesseract_path(self):
+        """浏览选择 Tesseract 可执行文件"""
+        current_path = self.tesseract_path_edit.text()
+        start_dir = os.path.dirname(current_path) if current_path else ''
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            '选择 Tesseract-OCR 可执行文件',
+            start_dir,
+            '可执行文件 (*.exe);;所有文件 (*.*)'
+        )
+        
+        if file_path:
+            self.tesseract_path_edit.setText(file_path)
+    
+    def test_tesseract_path(self):
+        """测试 Tesseract 路径是否有效"""
+        path = self.tesseract_path_edit.text().strip()
+        
+        if not path:
+            QMessageBox.warning(self, '提示', '请输入 Tesseract 路径。')
+            return
+        
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, '路径无效', f'文件不存在：\n{path}')
+            return
+        
+        if not path.lower().endswith('tesseract.exe'):
+            QMessageBox.warning(self, '路径无效', '请选择 tesseract.exe 文件。')
+            return
+        
+        # 尝试初始化并测试
+        try:
+            old_cmd = pytesseract.pytesseract.tesseract_cmd
+            pytesseract.pytesseract.tesseract_cmd = path
+            tessdir = os.path.dirname(path)
+            old_prefix = os.environ.get("TESSDATA_PREFIX", "")
+            os.environ["TESSDATA_PREFIX"] = tessdir
+            
+            # 简单测试：获取版本信息
+            version = pytesseract.get_tesseract_version()
+            
+            # 恢复
+            pytesseract.pytesseract.tesseract_cmd = old_cmd
+            if old_prefix:
+                os.environ["TESSDATA_PREFIX"] = old_prefix
+            
+            QMessageBox.information(
+                self,
+                '测试成功',
+                f'Tesseract OCR 路径有效！\n\n版本：{version}'
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                '测试失败',
+                f'无法使用该路径：\n{str(e)}\n\n请检查路径是否正确。'
+            )
+    
+    def get_tesseract_path(self):
+        """获取用户设置的 Tesseract 路径"""
+        return self.tesseract_path_edit.text().strip()
+
+    def browse_backup_path(self):
+        """浏览选择备份路径"""
+        current_path = self.backup_path_edit.text()
+        start_dir = current_path if current_path and os.path.exists(current_path) else ''
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            '选择备份文件夹',
+            start_dir
+        )
+        
+        if folder:
+            self.backup_path_edit.setText(folder)
+    
+    def browse_export_path(self):
+        """浏览选择导出路径"""
+        current_path = self.export_path_edit.text()
+        start_dir = current_path if current_path and os.path.exists(current_path) else ''
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            '选择默认导出文件夹',
+            start_dir
+        )
+        
+        if folder:
+            self.export_path_edit.setText(folder)
+    
+    def get_settings(self):
+        """一次性返回所有可配置项"""
+        return {
+            'tesseract_path': self.get_tesseract_path(),
+            'ocr_lang': self.ocr_lang_combo.currentData(),
+            'auto_load_invoices': self.auto_load_checkbox.isChecked(),
+            'match_tolerance': float(self.match_tol_spin.value()),
+            # 数据管理
+            'auto_backup': self.auto_backup_checkbox.isChecked(),
+            'backup_interval': int(self.backup_interval_spin.value()),
+            'backup_path': self.backup_path_edit.text().strip(),
+            # 导出设置
+            'export_path': self.export_path_edit.text().strip(),
+            'export_include_validation': self.include_validation_checkbox.isChecked(),
+            # 验证设置
+            'auto_validate': self.auto_validate_checkbox.isChecked(),
+            'validation_strictness': self.validation_strict_combo.currentData(),
+            # 界面设置
+            'list_show_tags': self.show_tags_checkbox.isChecked(),
+            'list_show_validation': self.show_validation_checkbox.isChecked(),
+            'buyer_expected_name': self.buyer_expected_edit.text().strip(),
+            # 其他设置
+            'show_save_prompt': self.show_save_prompt_checkbox.isChecked(),
+            'confirm_delete': self.confirm_delete_checkbox.isChecked(),
+            # AI 设置
+            'deepseek_api_key': self.api_key_edit.text().strip(),
+        }
+
+
+class TagsDialog(QDialog):
+    """标签管理对话框"""
+    
+    def __init__(self, parent=None, current_tags=None):
+        super().__init__(parent)
+        self.setWindowTitle('管理标签')
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        
+        self.current_tags = set(current_tags or [])
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        
+        # 当前标签显示
+        current_group = QGroupBox('当前标签')
+        current_layout = QVBoxLayout(current_group)
+        
+        self.tags_list = QListWidget()
+        self.tags_list.setMaximumHeight(120)
+        self.update_tags_display()
+        current_layout.addWidget(self.tags_list)
+        
+        # 删除按钮
+        delete_btn = QPushButton('删除选中标签')
+        delete_btn.setProperty('btnType', 'danger')
+        delete_btn.clicked.connect(self.delete_selected_tag)
+        current_layout.addWidget(delete_btn)
+        
+        layout.addWidget(current_group)
+        
+        # 添加标签区域
+        add_group = QGroupBox('添加标签')
+        add_layout = QVBoxLayout(add_group)
+        
+        # 常用标签快速添加
+        common_label = QLabel('常用标签：')
+        add_layout.addWidget(common_label)
+        
+        common_tags_layout = QHBoxLayout()
+        common_tags = ['已有支付记录', '已报销', '待审核', '重要', '待付款']
+        for tag in common_tags:
+            btn = QPushButton(tag)
+            btn.setProperty('btnType', 'ghost')
+            btn.clicked.connect(lambda checked, t=tag: self.add_tag(t))
+            common_tags_layout.addWidget(btn)
+        add_layout.addLayout(common_tags_layout)
+        
+        # 自定义标签输入
+        custom_layout = QHBoxLayout()
+        self.custom_tag_input = QLineEdit()
+        self.custom_tag_input.setPlaceholderText('输入自定义标签名称...')
+        self.custom_tag_input.returnPressed.connect(self.add_custom_tag)
+        custom_layout.addWidget(QLabel('自定义标签：'))
+        custom_layout.addWidget(self.custom_tag_input)
+        
+        add_custom_btn = QPushButton('添加')
+        add_custom_btn.setProperty('btnType', 'primary')
+        add_custom_btn.clicked.connect(self.add_custom_tag)
+        custom_layout.addWidget(add_custom_btn)
+        
+        add_layout.addLayout(custom_layout)
+        layout.addWidget(add_group)
+        
+        # 按钮区域
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        
+        ok_btn = QPushButton('确定')
+        ok_btn.setProperty('btnType', 'primary')
+        ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton('取消')
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def update_tags_display(self):
+        """更新标签列表显示"""
+        self.tags_list.clear()
+        for tag in sorted(self.current_tags):
+            self.tags_list.addItem(tag)
+    
+    def add_tag(self, tag):
+        """添加标签"""
+        if tag and tag.strip():
+            tag = tag.strip()
+            self.current_tags.add(tag)
+            self.update_tags_display()
+            self.custom_tag_input.clear()
+    
+    def add_custom_tag(self):
+        """添加自定义标签"""
+        tag = self.custom_tag_input.text().strip()
+        if tag:
+            self.add_tag(tag)
+    
+    def delete_selected_tag(self):
+        """删除选中的标签"""
+        current_item = self.tags_list.currentItem()
+        if current_item:
+            tag = current_item.text()
+            self.current_tags.discard(tag)
+            self.update_tags_display()
+    
+    def get_tags(self):
+        """获取当前标签列表"""
+        return list(self.current_tags)
+
+
+class HelpDialog(QDialog):
+    """说明对话框 - 显示免责声明和开发者信息"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('说明')
+        self.setModal(True)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        
+        # 使用标签页组织内容
+        tab_widget = QTabWidget()
+        
+        # ========== 开发者信息标签页 ==========
+        dev_tab = QWidget()
+        dev_layout = QVBoxLayout(dev_tab)
+        dev_layout.setSpacing(15)
+        
+        # 应用信息
+        app_info_group = QGroupBox('应用信息')
+        app_info_layout = QVBoxLayout(app_info_group)
+        app_info_text = QTextEdit()
+        app_info_text.setReadOnly(True)
+        app_info_text.setPlainText("""
+应用名称：发票自动管理分类系统
+版本：2.4.3
+开发者：石殷睿
+所属单位：苏州大学（Soochow University）
+专业：22EE（电子信息工程）
+
+功能简介：
+本软件用于辅助整理和初步识别发票、账单信息，方便进行分类、统计与简单核对。
+支持PDF发票导入、OCR识别、商品明细提取、购买记录匹配等功能。
+        """.strip())
+        app_info_layout.addWidget(app_info_text)
+        dev_layout.addWidget(app_info_group)
+        
+        # 联系方式
+        contact_group = QGroupBox('联系方式')
+        contact_layout = QVBoxLayout(contact_group)
+        contact_text = QTextEdit()
+        contact_text.setReadOnly(True)
+        contact_text.setPlainText("""
+邮箱：SYRQuartz@gmail.com
+个人主页：https://quartzsyr.github.io/photograph/
+        """.strip())
+        contact_layout.addWidget(contact_text)
+        dev_layout.addWidget(contact_group)
+        
+        # 技术栈
+        tech_group = QGroupBox('技术栈')
+        tech_layout = QVBoxLayout(tech_group)
+        tech_text = QTextEdit()
+        tech_text.setReadOnly(True)
+        tech_text.setPlainText("""
+开发语言：Python 3
+GUI框架：PyQt5
+PDF处理：pdfplumber
+OCR识别：Tesseract-OCR, pytesseract
+图像处理：PIL, OpenCV
+数据处理：pandas, numpy
+图表绘制：matplotlib
+        """.strip())
+        tech_layout.addWidget(tech_text)
+        dev_layout.addWidget(tech_group)
+        
+        tab_widget.addTab(dev_tab, '开发者信息')
+        
+        # ========== 免责声明标签页 ==========
+        disclaimer_tab = QWidget()
+        disclaimer_layout = QVBoxLayout(disclaimer_tab)
+        disclaimer_layout.setSpacing(15)
+        
+        # 使用说明
+        usage_group = QGroupBox('使用说明')
+        usage_layout = QVBoxLayout(usage_group)
+        usage_text = QTextEdit()
+        usage_text.setReadOnly(True)
+        usage_text.setPlainText("""
+【使用说明】
+
+1. 本软件仅对票据/账单信息进行初步识别和整理，识别结果可能存在错误、遗漏或不完整的情况。
+
+2. 请务必对软件输出结果进行人工复核，不要将识别结果作为唯一依据进行财务或法律决策。
+
+3. 如遇到明显异常结果，建议重新导入数据或联系作者反馈。
+
+4. 软件可能出错，仅供参考，请务必注意辨别结果。
+        """.strip())
+        usage_layout.addWidget(usage_text)
+        disclaimer_layout.addWidget(usage_group)
+        
+        # 免责声明
+        disclaimer_group = QGroupBox('免责声明')
+        disclaimer_layout_inner = QVBoxLayout(disclaimer_group)
+        disclaimer_text = QTextEdit()
+        disclaimer_text.setReadOnly(True)
+        disclaimer_text.setPlainText("""
+【免责声明】
+
+1. 本软件以"现状"提供，不对功能的准确性、完整性或适用性作出任何明示或默示担保。
+
+2. 因使用或无法使用本软件所产生的任何直接或间接损失，由使用者自行承担，作者不对由此造成的后果承担任何责任。
+
+3. 安装和使用本软件即视为您已充分理解并同意本免责声明的全部内容。
+
+4. 本软件仅供学习和研究使用，不得用于商业用途或任何可能产生法律后果的场景。
+
+5. 作者保留随时修改、更新或终止本软件的权利，无需事先通知。
+
+6. 如因使用本软件而产生的任何纠纷，使用者应自行承担全部责任。
+        """.strip())
+        disclaimer_layout_inner.addWidget(disclaimer_text)
+        disclaimer_layout.addWidget(disclaimer_group)
+        
+        # 版权信息
+        copyright_group = QGroupBox('版权信息')
+        copyright_layout = QVBoxLayout(copyright_group)
+        copyright_text = QTextEdit()
+        copyright_text.setReadOnly(True)
+        copyright_text.setPlainText("""
+版权所有 © 2024-2025 石殷睿
+
+本软件及其源代码受版权法保护。未经授权，不得复制、修改、分发或用于商业目的。
+
+开源许可：本软件采用 MIT 许可证，允许自由使用、修改和分发，但需保留版权声明。
+        """.strip())
+        copyright_layout.addWidget(copyright_text)
+        disclaimer_layout.addWidget(copyright_group)
+        
+        tab_widget.addTab(disclaimer_tab, '免责声明')
+        
+        layout.addWidget(tab_widget)
+        
+        # 按钮区域
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        
+        ok_btn = QPushButton('确定')
+        ok_btn.setProperty('btnType', 'primary')
+        ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(ok_btn)
+        
+        layout.addLayout(button_layout)
+
+
+class InvoiceManager(QMainWindow):
+    """发票管理主窗口"""
+
+    def __init__(self):
+        super().__init__()
+        self.invoices = []
+        self.parser = InvoiceParser()
+        self.match_worker = None
+        self.ai_worker = None  # AI工作线程
+        # 初始化 AI 客户端（从配置中读取 API key）
+        self.init_ai_client()
+        self.init_ui()
+
+        # 根据设置决定是否在启动时自动加载上一次的发票数据
+        cfg = load_config()
+        if cfg.get('auto_load_invoices', True):
+            self.load_invoices()
+    
+    def init_ai_client(self):
+        """初始化 AI 客户端"""
+        try:
+            cfg = load_config()
+            api_key = cfg.get('deepseek_api_key', '')
+            # 如果配置中有 API key，使用配置的；否则使用默认值
+            if api_key:
+                self.ai_client = DeepSeekInvoiceAI(api_key=api_key, mock_mode=False)
+            else:
+                self.ai_client = DeepSeekInvoiceAI(mock_mode=False)
+        except Exception as e:
+            print(f"AI客户端初始化失败，将使用模拟模式: {e}")
+            self.ai_client = DeepSeekInvoiceAI(mock_mode=True)
+
+    def init_ui(self):
+        """初始化用户界面"""
+        self.setWindowTitle('发票自动管理分类系统')
+        self.setGeometry(100, 100, 1200, 800)
+
+        # 创建中央部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+
+        # 主布局
+        main_layout = QVBoxLayout(central_widget)
+
+        # ===== 顶部导航栏（仿 Web 顶部菜单） =====
+        top_nav = QWidget()
+        top_nav.setObjectName('topNav')
+        top_nav_layout = QHBoxLayout(top_nav)
+        top_nav_layout.setContentsMargins(12, 6, 12, 6)
+        top_nav_layout.setSpacing(4)
+
+        self.nav_btn_home = QPushButton('发票管理')
+        self.nav_btn_home.setObjectName('topNavButton')
+        self.nav_btn_home.setCheckable(True)
+        self.nav_btn_home.setChecked(True)
+        self.nav_btn_home.clicked.connect(lambda: self.on_top_nav_clicked(self.nav_btn_home))
+        top_nav_layout.addWidget(self.nav_btn_home)
+
+        self.nav_btn_stats = QPushButton('统计分析')
+        self.nav_btn_stats.setObjectName('topNavButton')
+        self.nav_btn_stats.setCheckable(True)
+        self.nav_btn_stats.setChecked(False)
+        self.nav_btn_stats.clicked.connect(lambda: self.on_top_nav_clicked(self.nav_btn_stats))
+        top_nav_layout.addWidget(self.nav_btn_stats)
+
+        top_nav_layout.addStretch(1)
+
+        # 说明按钮
+        self.help_btn = QPushButton('📖 说明')
+        self.help_btn.setObjectName('topNavButton')
+        self.help_btn.clicked.connect(self.show_help_info)
+        top_nav_layout.addWidget(self.help_btn)
+
+        # 设置按钮
+        self.settings_btn = QPushButton('⚙ 设置')
+        self.settings_btn.setObjectName('topNavButton')
+        self.settings_btn.clicked.connect(self.open_settings)
+        top_nav_layout.addWidget(self.settings_btn)
+
+        # 顶部右侧开发者信息（含联系方式与版权）
+        self.dev_info_label = QLabel('Quartz · Soochow U · 22EE  |  联系方式: SYRQuartz@gmail.com  |  版权所有')
+        self.dev_info_label.setObjectName('devInfo')
+        top_nav_layout.addWidget(self.dev_info_label)
+
+        main_layout.addWidget(top_nav)
+
+        # ===== 中间内容区：使用 QStackedWidget 管理多个页面 =====
+        self.content_stack = QStackedWidget()
+        main_layout.addWidget(self.content_stack)
+
+        # ---------- 页面 1：发票管理主页 ----------
+        self.page_home = QWidget()
+        home_layout = QVBoxLayout(self.page_home)
+
+        # 顶部整体区域（标题 + 按钮 + 汇总信息）
+        top_container = QVBoxLayout()
+        top_container.setSpacing(6)
+
+        # 顶部第一行：应用标题 + 右侧汇总信息
+        header_layout = QHBoxLayout()
+
+        title_label = QLabel('发票自动管理分类系统')
+        title_label.setObjectName('appTitle')
+        header_layout.addWidget(title_label)
+        header_layout.addStretch(1)
+
+        # 右侧汇总信息：总金额 + 发票数量
+        summary_layout = QVBoxLayout()
+        summary_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.total_label = QLabel('总金额：¥0.00')
+        self.total_label.setObjectName('summaryLabel')
+        summary_layout.addWidget(self.total_label)
+
+        self.count_label = QLabel('共 0 张发票')
+        self.count_label.setObjectName('summaryLabel')
+        summary_layout.addWidget(self.count_label)
+
+        summary_container = QWidget()
+        summary_container.setLayout(summary_layout)
+        header_layout.addWidget(summary_container)
+
+        top_container.addLayout(header_layout)
+
+        # 顶部第二行：操作按钮行
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(10)
+
+        self.import_btn = QPushButton('批量导入发票')
+        # 主操作按钮：批量导入
+        self.import_btn.setProperty('btnType', 'primary')
+        self.import_btn.clicked.connect(self.import_invoices)
+        toolbar_layout.addWidget(self.import_btn)
+
+        self.export_btn = QPushButton('导出账单')
+        # 次级主按钮：导出
+        self.export_btn.setProperty('btnType', 'primary')
+        self.export_btn.clicked.connect(self.export_bill)
+        self.export_btn.setEnabled(False)
+        toolbar_layout.addWidget(self.export_btn)
+
+        self.clear_btn = QPushButton('清空数据')
+        # 危险操作按钮：清空数据
+        self.clear_btn.setProperty('btnType', 'danger')
+        self.clear_btn.clicked.connect(self.clear_data)
+        toolbar_layout.addWidget(self.clear_btn)
+
+        # 购买记录匹配按钮：批量 OCR 识别实付金额并与发票匹配后重命名
+        self.match_records_btn = QPushButton('匹配购买记录并重命名')
+        self.match_records_btn.setProperty('btnType', 'ghost')
+        self.match_records_btn.clicked.connect(self.match_purchase_records)
+        toolbar_layout.addWidget(self.match_records_btn)
+
+        # 把按钮整体靠左，右侧留空
+        toolbar_layout.addStretch(1)
+
+        top_container.addLayout(toolbar_layout)
+
+        home_layout.addLayout(top_container)
+
+        # 创建分割器
+        splitter = QSplitter(Qt.Horizontal)
+
+        # 左侧面板 - 发票列表
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+
+        left_layout.addWidget(QLabel('发票列表'))
+        
+        # 添加搜索框
+        search_layout = QHBoxLayout()
+        search_label = QLabel('🔍')
+        search_label.setMaximumWidth(30)
+        search_layout.addWidget(search_label)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText('搜索发票（发票号、销售方、文件名、标签等）')
+        self.search_input.textChanged.connect(self.on_search_text_changed)
+        search_layout.addWidget(self.search_input)
+        
+        # 清除搜索按钮
+        self.clear_search_btn = QPushButton('✕')
+        self.clear_search_btn.setMaximumWidth(30)
+        self.clear_search_btn.setToolTip('清除搜索')
+        self.clear_search_btn.clicked.connect(self.clear_search)
+        self.clear_search_btn.setVisible(False)
+        search_layout.addWidget(self.clear_search_btn)
+        
+        left_layout.addLayout(search_layout)
+
+        self.invoice_list = QListWidget()
+        self.invoice_list.itemClicked.connect(self.show_invoice_details)
+        left_layout.addWidget(self.invoice_list)
+        
+        # 存储过滤后的发票索引映射（用于点击时定位到原始列表）
+        self.filtered_invoice_indices = []
+
+        splitter.addWidget(left_panel)
+        
+        # 右侧面板 - 仅详情 + 编辑（已去掉预览区）
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        
+        # 发票详情
+        detail_group = QGroupBox('发票详情')
+        detail_layout = QVBoxLayout(detail_group)
+
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setStyleSheet("background-color: #fcfcfc;")
+        # 设置固定高度，避免占用过多空间，为商品明细留出空间
+        self.detail_text.setMaximumHeight(140)
+        self.detail_text.setMinimumHeight(100)
+        detail_layout.addWidget(self.detail_text)
+
+        # 文件管理按钮组（两行布局，确保所有按钮都能显示）
+        file_management_container = QWidget()
+        file_management_layout = QVBoxLayout(file_management_container)
+        file_management_layout.setContentsMargins(0, 0, 0, 0)
+        file_management_layout.setSpacing(6)
+        
+        # 第一行：前3个按钮
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(6)
+        
+        self.open_file_btn = QPushButton('📄 打开文件')
+        self.open_file_btn.setProperty('btnType', 'ghost')
+        self.open_file_btn.clicked.connect(self.open_invoice_file)
+        self.open_file_btn.setEnabled(False)
+        row1_layout.addWidget(self.open_file_btn)
+        
+        self.show_in_explorer_btn = QPushButton('📁 在文件夹中显示')
+        self.show_in_explorer_btn.setProperty('btnType', 'ghost')
+        self.show_in_explorer_btn.clicked.connect(self.show_file_in_explorer)
+        self.show_in_explorer_btn.setEnabled(False)
+        row1_layout.addWidget(self.show_in_explorer_btn)
+        
+        self.copy_path_btn = QPushButton('📋 复制路径')
+        self.copy_path_btn.setProperty('btnType', 'ghost')
+        self.copy_path_btn.clicked.connect(self.copy_file_path)
+        self.copy_path_btn.setEnabled(False)
+        row1_layout.addWidget(self.copy_path_btn)
+        
+        row1_layout.addStretch(1)
+        file_management_layout.addLayout(row1_layout)
+        
+        # 第二行：后2个按钮
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(6)
+        
+        self.relink_file_btn = QPushButton('🔗 重新关联')
+        self.relink_file_btn.setProperty('btnType', 'ghost')
+        self.relink_file_btn.clicked.connect(self.relink_invoice_file)
+        self.relink_file_btn.setEnabled(False)
+        row2_layout.addWidget(self.relink_file_btn)
+        
+        self.copy_file_btn = QPushButton('📦 复制文件')
+        self.copy_file_btn.setProperty('btnType', 'ghost')
+        self.copy_file_btn.clicked.connect(self.copy_invoice_file)
+        self.copy_file_btn.setEnabled(False)
+        row2_layout.addWidget(self.copy_file_btn)
+        
+        row2_layout.addStretch(1)
+        file_management_layout.addLayout(row2_layout)
+        
+        detail_layout.addWidget(file_management_container)
+        
+        # 标签管理和验证按钮
+        tags_layout = QHBoxLayout()
+        self.manage_tags_btn = QPushButton('🏷️ 管理标签')
+        self.manage_tags_btn.setProperty('btnType', 'ghost')
+        self.manage_tags_btn.clicked.connect(self.manage_invoice_tags)
+        self.manage_tags_btn.setEnabled(False)
+        tags_layout.addWidget(self.manage_tags_btn)
+        
+        self.validate_btn = QPushButton('✓ 验证发票')
+        self.validate_btn.setProperty('btnType', 'ghost')
+        self.validate_btn.clicked.connect(self.validate_current_invoice)
+        self.validate_btn.setEnabled(False)
+        tags_layout.addWidget(self.validate_btn)
+        
+        tags_layout.addStretch(1)
+        detail_layout.addLayout(tags_layout)
+        
+        # AI 分析按钮组
+        ai_layout = QHBoxLayout()
+        self.ai_analyze_btn = QPushButton('🤖 AI分析')
+        self.ai_analyze_btn.setProperty('btnType', 'ghost')
+        self.ai_analyze_btn.clicked.connect(self.ai_analyze_invoice)
+        self.ai_analyze_btn.setEnabled(False)
+        self.ai_analyze_btn.setToolTip('使用AI分析发票数据')
+        ai_layout.addWidget(self.ai_analyze_btn)
+        
+        self.ai_suggest_btn = QPushButton('💡 AI建议')
+        self.ai_suggest_btn.setProperty('btnType', 'ghost')
+        self.ai_suggest_btn.clicked.connect(self.ai_suggest_invoice)
+        self.ai_suggest_btn.setEnabled(False)
+        self.ai_suggest_btn.setToolTip('获取AI标签和操作建议')
+        ai_layout.addWidget(self.ai_suggest_btn)
+        
+        self.ai_review_btn = QPushButton('🔍 AI审核')
+        self.ai_review_btn.setProperty('btnType', 'ghost')
+        self.ai_review_btn.clicked.connect(self.ai_review_invoice)
+        self.ai_review_btn.setEnabled(False)
+        self.ai_review_btn.setToolTip('使用AI审核发票信息')
+        ai_layout.addWidget(self.ai_review_btn)
+        
+        ai_layout.addStretch(1)
+        detail_layout.addLayout(ai_layout)
+        
+        right_layout.addWidget(detail_group)
+
+        # 商品明细表格
+        table_group = QGroupBox('商品明细')
+        table_layout = QVBoxLayout(table_group)
+
+        self.items_table = QTableWidget()
+        self.items_table.setColumnCount(6)
+        self.items_table.setHorizontalHeaderLabels(['分类', '商品名称', '数量', '单价', '金额', '规格'])
+        # 表格外观优化
+        self.items_table.setAlternatingRowColors(True)
+        self.items_table.setStyleSheet(
+            "QTableWidget { gridline-color: #dddddd; }"
+            "QHeaderView::section { background-color: #f0f0f0; font-weight: bold; }"
+        )
+        self.items_table.horizontalHeader().setStretchLastSection(True)
+        self.items_table.cellChanged.connect(self.on_item_changed)
+        # 设置表格最小高度，确保商品明细区域可见
+        self.items_table.setMinimumHeight(150)
+        table_layout.addWidget(self.items_table)
+
+        # 编辑按钮
+        edit_layout = QHBoxLayout()
+        self.edit_category_btn = QPushButton('修改分类')
+        self.edit_category_btn.setProperty('btnType', 'ghost')
+        self.edit_category_btn.clicked.connect(self.edit_category)
+        edit_layout.addWidget(self.edit_category_btn)
+
+        self.add_item_btn = QPushButton('添加商品')
+        self.add_item_btn.setProperty('btnType', 'primary')
+        self.add_item_btn.clicked.connect(self.add_item)
+        edit_layout.addWidget(self.add_item_btn)
+
+        self.delete_item_btn = QPushButton('删除商品')
+        self.delete_item_btn.setProperty('btnType', 'danger')
+        self.delete_item_btn.clicked.connect(self.delete_item)
+        edit_layout.addWidget(self.delete_item_btn)
+
+        table_layout.addLayout(edit_layout)
+        # 将商品明细表格添加到布局，并设置拉伸因子，确保它能占用剩余空间
+        right_layout.addWidget(table_group, stretch=2)  # 给商品明细更大的权重，确保可见
+
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 800])
+
+        home_layout.addWidget(splitter)
+
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        home_layout.addWidget(self.progress_bar)
+
+        # 将主页加入栈
+        self.content_stack.addWidget(self.page_home)
+
+        # ---------- 页面 2：统计分析 ----------
+        self.page_stats = QWidget()
+        stats_layout = QVBoxLayout(self.page_stats)
+        
+        # 使用滚动区域，支持多个统计表格
+        stats_scroll = QScrollArea()
+        stats_scroll.setWidgetResizable(True)
+        stats_scroll_content = QWidget()
+        stats_scroll_layout = QVBoxLayout(stats_scroll_content)
+        stats_scroll_layout.setSpacing(15)
+
+        # ========== 统计总览 ==========
+        stats_group = QGroupBox('统计总览')
+        stats_group_layout = QVBoxLayout(stats_group)
+        stats_group_layout.setSpacing(10)
+
+        # 基本统计信息
+        summary_header_layout = QHBoxLayout()
+        self.stats_summary_label = QLabel('共 0 张发票，合计金额 ¥0.00')
+        self.stats_summary_label.setStyleSheet('font-size: 14pt; font-weight: bold;')
+        summary_header_layout.addWidget(self.stats_summary_label)
+        summary_header_layout.addStretch(1)
+        
+        # AI整体分析按钮
+        self.ai_analyze_all_btn = QPushButton('🤖 AI整体分析')
+        self.ai_analyze_all_btn.setProperty('btnType', 'primary')
+        self.ai_analyze_all_btn.clicked.connect(self.ai_analyze_all_invoices)
+        self.ai_analyze_all_btn.setEnabled(False)
+        self.ai_analyze_all_btn.setToolTip('使用AI分析所有发票数据')
+        summary_header_layout.addWidget(self.ai_analyze_all_btn)
+        
+        stats_group_layout.addLayout(summary_header_layout)
+        
+        # 详细统计信息
+        detail_stats_layout = QHBoxLayout()
+        detail_stats_layout.setSpacing(20)
+        
+        self.stats_detail_label = QLabel('')
+        self.stats_detail_label.setWordWrap(True)
+        detail_stats_layout.addWidget(self.stats_detail_label)
+        
+        stats_group_layout.addLayout(detail_stats_layout)
+        stats_scroll_layout.addWidget(stats_group)
+
+        # ========== 按销售方统计 ==========
+        stats_seller_group = QGroupBox('按销售方统计')
+        seller_layout = QVBoxLayout(stats_seller_group)
+
+        self.stats_seller_table = QTableWidget()
+        self.stats_seller_table.setColumnCount(4)
+        self.stats_seller_table.setHorizontalHeaderLabels(['销售方', '发票数量', '合计金额', '占比'])
+        self.stats_seller_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_seller_table.setAlternatingRowColors(True)
+        seller_layout.addWidget(self.stats_seller_table)
+
+        # 销售方图表
+        seller_chart_layout = QHBoxLayout()
+        self.seller_chart_canvas = self.create_pie_chart_canvas()
+        seller_chart_layout.addWidget(self.seller_chart_canvas)
+        seller_layout.addLayout(seller_chart_layout)
+        
+        stats_scroll_layout.addWidget(stats_seller_group)
+        
+        # ========== 按分类统计 ==========
+        stats_category_group = QGroupBox('按商品分类统计')
+        category_layout = QVBoxLayout(stats_category_group)
+        
+        self.stats_category_table = QTableWidget()
+        self.stats_category_table.setColumnCount(4)
+        self.stats_category_table.setHorizontalHeaderLabels(['分类', '商品数量', '合计金额', '占比'])
+        self.stats_category_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_category_table.setAlternatingRowColors(True)
+        category_layout.addWidget(self.stats_category_table)
+        
+        # 分类图表
+        category_chart_layout = QHBoxLayout()
+        self.category_chart_canvas = self.create_pie_chart_canvas()
+        category_chart_layout.addWidget(self.category_chart_canvas)
+        category_layout.addLayout(category_chart_layout)
+        
+        stats_scroll_layout.addWidget(stats_category_group)
+        
+        # ========== 按日期统计 ==========
+        stats_date_group = QGroupBox('按日期统计')
+        date_layout = QVBoxLayout(stats_date_group)
+        
+        # 日期统计选项
+        date_options_layout = QHBoxLayout()
+        date_options_layout.addWidget(QLabel('统计维度：'))
+        self.date_stats_type_combo = QComboBox()
+        self.date_stats_type_combo.addItem('按月统计', 'month')
+        self.date_stats_type_combo.addItem('按年统计', 'year')
+        self.date_stats_type_combo.addItem('按日统计', 'day')
+        self.date_stats_type_combo.currentIndexChanged.connect(self.update_stats_view)
+        date_options_layout.addWidget(self.date_stats_type_combo)
+        date_options_layout.addStretch(1)
+        date_layout.addLayout(date_options_layout)
+        
+        self.stats_date_table = QTableWidget()
+        self.stats_date_table.setColumnCount(4)
+        self.stats_date_table.setHorizontalHeaderLabels(['日期', '发票数量', '合计金额', '占比'])
+        self.stats_date_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_date_table.setAlternatingRowColors(True)
+        date_layout.addWidget(self.stats_date_table)
+        
+        # 日期趋势图表
+        date_chart_layout = QHBoxLayout()
+        self.date_chart_canvas = self.create_bar_chart_canvas()
+        date_chart_layout.addWidget(self.date_chart_canvas)
+        date_layout.addLayout(date_chart_layout)
+        
+        stats_scroll_layout.addWidget(stats_date_group)
+        
+        # ========== 按标签统计 ==========
+        stats_tag_group = QGroupBox('按标签统计')
+        tag_layout = QVBoxLayout(stats_tag_group)
+        
+        self.stats_tag_table = QTableWidget()
+        self.stats_tag_table.setColumnCount(4)
+        self.stats_tag_table.setHorizontalHeaderLabels(['标签', '发票数量', '合计金额', '占比'])
+        self.stats_tag_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_tag_table.setAlternatingRowColors(True)
+        tag_layout.addWidget(self.stats_tag_table)
+        
+        stats_scroll_layout.addWidget(stats_tag_group)
+        
+        # ========== 验证状态统计 ==========
+        stats_validation_group = QGroupBox('验证状态统计')
+        validation_layout = QVBoxLayout(stats_validation_group)
+        
+        self.stats_validation_table = QTableWidget()
+        self.stats_validation_table.setColumnCount(3)
+        self.stats_validation_table.setHorizontalHeaderLabels(['验证状态', '发票数量', '合计金额'])
+        self.stats_validation_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_validation_table.setAlternatingRowColors(True)
+        validation_layout.addWidget(self.stats_validation_table)
+        
+        stats_scroll_layout.addWidget(stats_validation_group)
+        
+        # 设置滚动区域内容
+        stats_scroll.setWidget(stats_scroll_content)
+        stats_layout.addWidget(stats_scroll)
+
+        self.content_stack.addWidget(self.page_stats)
+
+        # 状态栏
+        self.status_bar = self.statusBar()
+        self.status_bar.showMessage('就绪')
+    
+    def create_pie_chart_canvas(self):
+        """创建饼图画布"""
+        fig = Figure(figsize=(6, 4))
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(300)
+        return canvas
+    
+    def create_bar_chart_canvas(self):
+        """创建柱状图画布"""
+        fig = Figure(figsize=(8, 4))
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(300)
+        return canvas
+    
+    def update_pie_chart(self, canvas, data_dict, title, total_amount):
+        """更新饼图"""
+        if not data_dict or total_amount == 0:
+            canvas.figure.clear()
+            ax = canvas.figure.add_subplot(111)
+            ax.text(0.5, 0.5, '暂无数据', ha='center', va='center', fontsize=14)
+            ax.axis('off')
+            canvas.draw()
+            return
+        
+        # 只显示前10个最大的项目，其他合并为"其他"
+        sorted_items = sorted(data_dict.items(), key=lambda x: x[1]['amount'], reverse=True)
+        if len(sorted_items) > 10:
+            top_items = sorted_items[:9]
+            other_amount = sum(item[1]['amount'] for item in sorted_items[9:])
+            other_count = sum(item[1]['count'] for item in sorted_items[9:])
+            if other_amount > 0:
+                top_items.append(('其他', {'amount': other_amount, 'count': other_count}))
+            sorted_items = top_items
+        
+        labels = [item[0] for item in sorted_items]
+        amounts = [item[1]['amount'] for item in sorted_items]
+        colors = plt.cm.Set3(range(len(labels)))
+        
+        canvas.figure.clear()
+        ax = canvas.figure.add_subplot(111)
+        
+        # 创建饼图，确保中文标签正确显示
+        wedges, texts, autotexts = ax.pie(
+            amounts,
+            labels=labels,
+            autopct=lambda pct: f'{pct:.1f}%',
+            startangle=90,
+            colors=colors,
+            textprops={'fontsize': 9}
+        )
+        
+        # 调整标签位置和样式，确保中文显示
+        for text in texts:
+            text.set_fontsize(9)
+            # 如果标签太长，截断并添加省略号
+            label_text = text.get_text()
+            if len(label_text) > 10:
+                text.set_text(label_text[:9] + '...')
+        
+        # 调整百分比文本
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+            autotext.set_fontsize(9)
+        
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        canvas.draw()
+    
+    def update_bar_chart(self, canvas, data_dict, title, xlabel='日期', ylabel='金额（元）'):
+        """更新柱状图"""
+        if not data_dict:
+            canvas.figure.clear()
+            ax = canvas.figure.add_subplot(111)
+            ax.text(0.5, 0.5, '暂无数据', ha='center', va='center', fontsize=14)
+            ax.axis('off')
+            canvas.draw()
+            return
+        
+        # 按日期排序
+        sorted_items = sorted(data_dict.items(), key=lambda x: x[0])
+        
+        # 限制显示数量，避免图表过于拥挤
+        if len(sorted_items) > 20:
+            sorted_items = sorted_items[-20:]  # 只显示最近20个
+        
+        dates = [item[0] for item in sorted_items]
+        amounts = [item[1]['amount'] for item in sorted_items]
+        
+        canvas.figure.clear()
+        ax = canvas.figure.add_subplot(111)
+        
+        # 创建柱状图
+        bars = ax.bar(range(len(dates)), amounts, color='#2563eb', alpha=0.7, edgecolor='#1e40af', linewidth=1)
+        
+        # 设置x轴标签，确保中文正确显示
+        ax.set_xticks(range(len(dates)))
+        ax.set_xticklabels(dates, rotation=45, ha='right', fontsize=8)
+        
+        # 设置标题和标签，确保中文正确显示
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel(xlabel, fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        
+        # 添加网格
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # 在柱子上显示数值（如果空间足够）
+        if len(dates) <= 15:
+            for i, (bar, amount) in enumerate(zip(bars, amounts)):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'¥{amount:.0f}',
+                       ha='center', va='bottom', fontsize=7)
+        
+        # 调整布局
+        canvas.figure.tight_layout()
+        canvas.draw()
+
+    def import_invoices(self):
+        """批量导入发票"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, '选择发票文件', '', 'PDF文件 (*.pdf);;所有文件 (*.*)'
+        )
+
+        if not files:
+            return
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.status_bar.showMessage('正在处理发票...')
+
+        # 禁用导入按钮
+        self.import_btn.setEnabled(False)
+
+        # 创建处理线程
+        self.processor = InvoiceProcessor(files)
+        self.processor.progress.connect(self.update_progress)
+        self.processor.finished.connect(self.on_import_finished)
+        self.processor.error.connect(self.on_import_error)
+        self.processor.start()
+
+    def update_progress(self, value):
+        """更新进度条"""
+        self.progress_bar.setValue(value)
+
+    def on_import_finished(self, invoices):
+        """导入完成"""
+        added_count = 0
+        duplicate_count = 0
+        validation_errors = []
+        validation_warnings = []
+
+        for inv in invoices:
+            if self._is_duplicate_invoice(inv):
+                duplicate_count += 1
+                continue
+            
+            # 自动验证发票
+            validation_result = self.parser.validate_invoice(inv, self.invoices)
+            inv['validation'] = validation_result
+            
+            # 统计验证问题
+            if validation_result['errors']:
+                validation_errors.append({
+                    'invoice': inv.get('invoice_number', '未知'),
+                    'errors': validation_result['errors']
+                })
+            if validation_result['warnings']:
+                validation_warnings.append({
+                    'invoice': inv.get('invoice_number', '未知'),
+                    'warnings': validation_result['warnings']
+                })
+            
+            self.invoices.append(inv)
+            added_count += 1
+
+        # 更新界面
+        self.update_invoice_list()
+        self.update_total_label()
+        self.update_stats_view()
+        self.progress_bar.setVisible(False)
+        self.import_btn.setEnabled(True)
+        self.export_btn.setEnabled(bool(self.invoices))
+
+        # 构建提示信息
+        msg_parts = [f'成功导入 {added_count} 张发票']
+        
+        if duplicate_count > 0:
+            msg_parts.append(f'跳过重复发票 {duplicate_count} 张')
+        
+        if validation_errors:
+            error_count = len(validation_errors)
+            msg_parts.append(f'发现 {error_count} 张发票有错误')
+        
+        if validation_warnings:
+            warning_count = len(validation_warnings)
+            msg_parts.append(f'发现 {warning_count} 张发票有警告')
+        
+        self.status_bar.showMessage(' | '.join(msg_parts))
+        
+        # 显示详细验证结果
+        if validation_errors or validation_warnings or duplicate_count > 0:
+            detail_msg = f'成功导入 {added_count} 张发票。\n\n'
+            
+            if duplicate_count > 0:
+                detail_msg += f'跳过重复发票：{duplicate_count} 张\n'
+            
+            if validation_errors:
+                detail_msg += f'\n发现 {len(validation_errors)} 张发票有错误：\n'
+                for item in validation_errors[:5]:  # 最多显示5个
+                    detail_msg += f"  • {item['invoice']}: {', '.join(item['errors'][:2])}\n"
+                if len(validation_errors) > 5:
+                    detail_msg += f"  ... 还有 {len(validation_errors) - 5} 张发票有错误\n"
+            
+            if validation_warnings:
+                detail_msg += f'\n发现 {len(validation_warnings)} 张发票有警告（可忽略）：\n'
+                for item in validation_warnings[:3]:  # 最多显示3个
+                    detail_msg += f"  • {item['invoice']}: {', '.join(item['warnings'][:1])}\n"
+                if len(validation_warnings) > 3:
+                    detail_msg += f"  ... 还有 {len(validation_warnings) - 3} 张发票有警告\n"
+            
+            detail_msg += '\n提示：可以在发票详情中查看完整的验证信息。'
+            
+            QMessageBox.information(self, '导入完成', detail_msg)
+        else:
+            QMessageBox.information(self, '导入完成', f'成功导入 {added_count} 张发票，所有发票验证通过。')
+
+    def on_import_error(self, error_msg):
+        """导入错误"""
+        QMessageBox.warning(self, '导入错误', error_msg)
+
+    # ===== 顶部导航交互（当前只是样式和选中态，后续可扩展为多页面） =====
+    def on_top_nav_clicked(self, clicked_btn):
+        """顶部导航按钮点击时，高亮当前选项（预留多页面切换入口）"""
+        # 保证导航按钮互斥选中
+        for btn in [self.nav_btn_home, self.nav_btn_stats]:
+            btn.setChecked(btn is clicked_btn)
+
+        # 根据当前选中按钮切换内容页面
+        if clicked_btn is self.nav_btn_home:
+            self.content_stack.setCurrentWidget(self.page_home)
+        elif clicked_btn is self.nav_btn_stats:
+            # 切换到统计分析页面前，先刷新统计数据
+            self.update_stats_view()
+            self.content_stack.setCurrentWidget(self.page_stats)
+
+    def update_stats_view(self):
+        """刷新统计分析页面的数据"""
+        # 更新AI整体分析按钮状态
+        if hasattr(self, 'ai_analyze_all_btn'):
+            self.ai_analyze_all_btn.setEnabled(bool(self.invoices))
+        
+        if not self.invoices:
+            # 清空所有统计表格
+            self.stats_summary_label.setText('共 0 张发票，合计金额 ¥0.00')
+            self.stats_detail_label.setText('')
+            self.stats_seller_table.setRowCount(0)
+            self.stats_category_table.setRowCount(0)
+            self.stats_date_table.setRowCount(0)
+            self.stats_tag_table.setRowCount(0)
+            self.stats_validation_table.setRowCount(0)
+            return
+        
+        total_count = len(self.invoices)
+        total_amount = 0.0
+        seller_stats = {}
+        category_stats = {}
+        date_stats = {}
+        tag_stats = {}
+        validation_stats = {'通过': {'count': 0, 'amount': 0.0}, 
+                          '有错误': {'count': 0, 'amount': 0.0},
+                          '有警告': {'count': 0, 'amount': 0.0},
+                          '未验证': {'count': 0, 'amount': 0.0}}
+        
+        amounts = []
+        date_stats_type = self.date_stats_type_combo.currentData() if hasattr(self, 'date_stats_type_combo') else 'month'
+
+        for inv in self.invoices:
+            amount = float(inv.get('total_amount', 0) or 0)
+            total_amount += amount
+            amounts.append(amount)
+            
+            # 销售方统计
+            seller = inv.get('seller', '未知')
+            if seller not in seller_stats:
+                seller_stats[seller] = {'count': 0, 'amount': 0.0}
+            seller_stats[seller]['count'] += 1
+            seller_stats[seller]['amount'] += amount
+            
+            # 分类统计
+            items = inv.get('items', [])
+            for item in items:
+                category = item.get('category', '其他')
+                item_amount = float(item.get('amount', 0) or 0)
+                if category not in category_stats:
+                    category_stats[category] = {'count': 0, 'amount': 0.0}
+                category_stats[category]['count'] += 1
+                category_stats[category]['amount'] += item_amount
+            
+            # 日期统计
+            date_str = inv.get('date', '')
+            if date_str:
+                try:
+                    # 解析日期
+                    if '年' in date_str and '月' in date_str:
+                        # 格式：2025年12月02日
+                        parts = date_str.replace('日', '').split('年')
+                        if len(parts) == 2:
+                            year = parts[0]
+                            month_day = parts[1].split('月')
+                            if len(month_day) == 2:
+                                month = month_day[0]
+                                day = month_day[1]
+                                
+                                if date_stats_type == 'year':
+                                    date_key = year + '年'
+                                elif date_stats_type == 'month':
+                                    date_key = f"{year}年{month}月"
+                                else:  # day
+                                    date_key = date_str
+                                
+                                if date_key not in date_stats:
+                                    date_stats[date_key] = {'count': 0, 'amount': 0.0}
+                                date_stats[date_key]['count'] += 1
+                                date_stats[date_key]['amount'] += amount
+                except:
+                    pass
+            
+            # 标签统计
+            tags = inv.get('tags', [])
+            if tags:
+                for tag in tags:
+                    if tag not in tag_stats:
+                        tag_stats[tag] = {'count': 0, 'amount': 0.0}
+                    tag_stats[tag]['count'] += 1
+                    tag_stats[tag]['amount'] += amount
+            
+            # 验证状态统计
+            validation = inv.get('validation')
+            if validation:
+                if not validation['is_valid']:
+                    validation_stats['有错误']['count'] += 1
+                    validation_stats['有错误']['amount'] += amount
+                elif validation['warnings']:
+                    validation_stats['有警告']['count'] += 1
+                    validation_stats['有警告']['amount'] += amount
+                else:
+                    validation_stats['通过']['count'] += 1
+                    validation_stats['通过']['amount'] += amount
+            else:
+                validation_stats['未验证']['count'] += 1
+                validation_stats['未验证']['amount'] += amount
+
+        # 计算详细统计信息
+        avg_amount = total_amount / total_count if total_count > 0 else 0
+        max_amount = max(amounts) if amounts else 0
+        min_amount = min(amounts) if amounts else 0
+        
+        # 更新顶部汇总文字
+        self.stats_summary_label.setText(
+            f'共 {total_count} 张发票，合计金额 ¥{total_amount:.2f}'
+        )
+        
+        # 更新详细统计信息
+        detail_text = f"""
+平均金额：¥{avg_amount:.2f}  |  最大金额：¥{max_amount:.2f}  |  最小金额：¥{min_amount:.2f}
+        """
+        self.stats_detail_label.setText(detail_text.strip())
+
+        # ========== 更新按销售方统计表 ==========
+        rows = len(seller_stats)
+        self.stats_seller_table.setRowCount(rows)
+        sorted_sellers = sorted(seller_stats.items(), key=lambda x: x[1]['amount'], reverse=True)
+        for row, (seller, data) in enumerate(sorted_sellers):
+            self.stats_seller_table.setItem(row, 0, QTableWidgetItem(seller))
+            self.stats_seller_table.setItem(row, 1, QTableWidgetItem(str(data['count'])))
+            self.stats_seller_table.setItem(row, 2, QTableWidgetItem(f"¥{data['amount']:.2f}"))
+            percentage = (data['amount'] / total_amount * 100) if total_amount > 0 else 0
+            self.stats_seller_table.setItem(row, 3, QTableWidgetItem(f"{percentage:.1f}%"))
+        
+        # 更新销售方饼图
+        if hasattr(self, 'seller_chart_canvas'):
+            self.update_pie_chart(self.seller_chart_canvas, seller_stats, '按销售方金额分布', total_amount)
+
+        # ========== 更新按分类统计表 ==========
+        rows = len(category_stats)
+        self.stats_category_table.setRowCount(rows)
+        sorted_categories = sorted(category_stats.items(), key=lambda x: x[1]['amount'], reverse=True)
+        for row, (category, data) in enumerate(sorted_categories):
+            self.stats_category_table.setItem(row, 0, QTableWidgetItem(category))
+            self.stats_category_table.setItem(row, 1, QTableWidgetItem(str(data['count'])))
+            self.stats_category_table.setItem(row, 2, QTableWidgetItem(f"¥{data['amount']:.2f}"))
+            percentage = (data['amount'] / total_amount * 100) if total_amount > 0 else 0
+            self.stats_category_table.setItem(row, 3, QTableWidgetItem(f"{percentage:.1f}%"))
+        
+        # 更新分类饼图
+        if hasattr(self, 'category_chart_canvas'):
+            category_total = sum(data['amount'] for data in category_stats.values())
+            self.update_pie_chart(self.category_chart_canvas, category_stats, '按商品分类金额分布', category_total)
+
+        # ========== 更新按日期统计表 ==========
+        rows = len(date_stats)
+        self.stats_date_table.setRowCount(rows)
+        sorted_dates = sorted(date_stats.items(), key=lambda x: x[0], reverse=True)
+        for row, (date_key, data) in enumerate(sorted_dates):
+            self.stats_date_table.setItem(row, 0, QTableWidgetItem(date_key))
+            self.stats_date_table.setItem(row, 1, QTableWidgetItem(str(data['count'])))
+            self.stats_date_table.setItem(row, 2, QTableWidgetItem(f"¥{data['amount']:.2f}"))
+            percentage = (data['amount'] / total_amount * 100) if total_amount > 0 else 0
+            self.stats_date_table.setItem(row, 3, QTableWidgetItem(f"{percentage:.1f}%"))
+        
+        # 更新日期趋势柱状图
+        if hasattr(self, 'date_chart_canvas'):
+            date_type_name = {'month': '月度', 'year': '年度', 'day': '日期'}.get(date_stats_type, '日期')
+            self.update_bar_chart(self.date_chart_canvas, date_stats, f'{date_type_name}金额趋势', '日期', '金额（元）')
+
+        # ========== 更新按标签统计表 ==========
+        rows = len(tag_stats)
+        self.stats_tag_table.setRowCount(rows)
+        sorted_tags = sorted(tag_stats.items(), key=lambda x: x[1]['amount'], reverse=True)
+        for row, (tag, data) in enumerate(sorted_tags):
+            self.stats_tag_table.setItem(row, 0, QTableWidgetItem(tag))
+            self.stats_tag_table.setItem(row, 1, QTableWidgetItem(str(data['count'])))
+            self.stats_tag_table.setItem(row, 2, QTableWidgetItem(f"¥{data['amount']:.2f}"))
+            percentage = (data['amount'] / total_amount * 100) if total_amount > 0 else 0
+            self.stats_tag_table.setItem(row, 3, QTableWidgetItem(f"{percentage:.1f}%"))
+
+        # ========== 更新验证状态统计表 ==========
+        rows = len([k for k, v in validation_stats.items() if v['count'] > 0])
+        self.stats_validation_table.setRowCount(rows)
+        row = 0
+        for status, data in validation_stats.items():
+            if data['count'] > 0:
+                self.stats_validation_table.setItem(row, 0, QTableWidgetItem(status))
+                self.stats_validation_table.setItem(row, 1, QTableWidgetItem(str(data['count'])))
+                self.stats_validation_table.setItem(row, 2, QTableWidgetItem(f"¥{data['amount']:.2f}"))
+                row += 1
+
+    def update_invoice_list(self, search_text=None):
+        """更新发票列表"""
+        self.invoice_list.clear()
+        self.filtered_invoice_indices = []
+        
+        cfg = load_config()
+        show_tags = cfg.get('list_show_tags', True)
+        show_validation = cfg.get('list_show_validation', True)
+        
+        # 如果没有搜索文本，使用空字符串进行匹配（显示所有）
+        if search_text is None:
+            search_text = getattr(self, 'search_input', None)
+            if search_text:
+                search_text = search_text.text().strip().lower()
+            else:
+                search_text = ''
+        
+        # 过滤发票
+        filtered_invoices = []
+        for idx, invoice in enumerate(self.invoices):
+            if self._invoice_matches_search(invoice, search_text):
+                filtered_invoices.append((idx, invoice))
+        
+        # 显示过滤后的发票
+        for original_idx, invoice in filtered_invoices:
+            self.filtered_invoice_indices.append(original_idx)
+            
+            file_name = os.path.basename(invoice['file_path'])
+            amount = invoice.get('total_amount', 0)
+            seller = invoice.get('seller', '未知')
+            
+            # 显示标签信息（根据配置）
+            tags = invoice.get('tags', [])
+            tags_str = f" [{', '.join(tags)}]" if tags and show_tags else ""
+            
+            # 显示验证状态标记（根据配置）
+            validation = invoice.get('validation')
+            validation_mark = ''
+            if show_validation and validation:
+                if not validation['is_valid']:
+                    validation_mark = ' ⚠️'
+                elif validation['warnings']:
+                    validation_mark = ' ⚡'
+            
+            item_text = f"{file_name} - {seller} - ¥{amount:.2f}{tags_str}{validation_mark}"
+            
+            # 创建列表项
+            item = QListWidgetItem(item_text)
+            
+            # 如果有验证错误，使用红色背景
+            if validation and not validation['is_valid']:
+                item.setBackground(QBrush(QColor(255, 240, 240)))  # 浅红色背景
+                item.setForeground(QBrush(QColor(200, 0, 0)))  # 深红色文字
+            # 如果有标签，设置不同的颜色
+            elif tags:
+                # 根据标签设置颜色（优先级：已有支付记录 > 已报销 > 待审核 > 重要 > 其他）
+                if '已有支付记录' in tags:
+                    item.setForeground(QBrush(QColor(34, 139, 34)))  # 绿色
+                elif '已报销' in tags:
+                    item.setForeground(QBrush(QColor(30, 144, 255)))  # 蓝色
+                elif '待审核' in tags:
+                    item.setForeground(QBrush(QColor(255, 140, 0)))  # 橙色
+                elif '重要' in tags:
+                    item.setForeground(QBrush(QColor(220, 20, 60)))  # 红色
+                else:
+                    item.setForeground(QBrush(QColor(138, 43, 226)))  # 紫色
+            
+            # 添加到列表
+            self.invoice_list.addItem(item)
+
+        # 同时更新总金额显示（显示过滤后的统计）
+        self.update_total_label(filtered_invoices=[inv for _, inv in filtered_invoices])
+        
+        # 更新清除搜索按钮的可见性
+        if hasattr(self, 'clear_search_btn'):
+            self.clear_search_btn.setVisible(bool(search_text))
+
+    def update_total_label(self, filtered_invoices=None):
+        """更新界面右上角的总金额显示（所有发票价税合计之和）"""
+        if filtered_invoices is not None:
+            # 显示过滤后的统计
+            total = 0.0
+            for inv in filtered_invoices:
+                total += float(inv.get('total_amount', 0) or 0)
+            self.total_label.setText(f"总金额：¥{total:.2f}")
+            if hasattr(self, 'count_label'):
+                total_count = len(self.invoices)
+                filtered_count = len(filtered_invoices)
+                if filtered_count < total_count:
+                    self.count_label.setText(f"共 {filtered_count}/{total_count} 张发票（已过滤）")
+                else:
+                    self.count_label.setText(f"共 {total_count} 张发票")
+        else:
+            # 显示全部统计
+            total = 0.0
+            for inv in self.invoices:
+                total += float(inv.get('total_amount', 0) or 0)
+            self.total_label.setText(f"总金额：¥{total:.2f}")
+            if hasattr(self, 'count_label'):
+                self.count_label.setText(f"共 {len(self.invoices)} 张发票")
+
+    def show_invoice_details(self, item):
+        """显示发票详情"""
+        list_index = self.invoice_list.row(item)
+        # 如果进行了搜索过滤，需要映射回原始索引
+        if hasattr(self, 'filtered_invoice_indices') and self.filtered_invoice_indices:
+            if list_index < len(self.filtered_invoice_indices):
+                original_index = self.filtered_invoice_indices[list_index]
+                if original_index < len(self.invoices):
+                    invoice = self.invoices[original_index]
+                    self.display_invoice_details(invoice)
+                    self.display_invoice_items(invoice)
+        else:
+            # 没有过滤，直接使用列表索引
+            if list_index < len(self.invoices):
+                invoice = self.invoices[list_index]
+                self.display_invoice_details(invoice)
+                self.display_invoice_items(invoice)
+
+    def _invoice_matches_search(self, invoice, search_text):
+        """检查发票是否匹配搜索文本"""
+        if not search_text:
+            return True
+        
+        search_text = search_text.lower()
+        
+        # 搜索发票号
+        invoice_number = (invoice.get('invoice_number') or '').lower()
+        if search_text in invoice_number:
+            return True
+        
+        # 搜索销售方
+        seller = (invoice.get('seller') or '').lower()
+        if search_text in seller:
+            return True
+        
+        # 搜索购买方
+        buyer = (invoice.get('buyer') or '').lower()
+        if search_text in buyer:
+            return True
+        
+        # 搜索文件名
+        file_path = invoice.get('file_path', '')
+        file_name = os.path.basename(file_path).lower()
+        if search_text in file_name:
+            return True
+        
+        # 搜索标签
+        tags = invoice.get('tags', [])
+        for tag in tags:
+            if search_text in tag.lower():
+                return True
+        
+        # 搜索商品名称
+        items = invoice.get('items', [])
+        for item in items:
+            item_name = (item.get('name') or '').lower()
+            if search_text in item_name:
+                return True
+            # 搜索商品分类
+            category = (item.get('category') or '').lower()
+            if search_text in category:
+                return True
+        
+        # 搜索金额（支持数字搜索）
+        try:
+            search_amount = float(search_text)
+            total_amount = float(invoice.get('total_amount', 0) or 0)
+            if abs(total_amount - search_amount) < 0.01:  # 允许小的浮点误差
+                return True
+        except ValueError:
+            pass
+        
+        # 搜索日期
+        date_str = (invoice.get('date') or '').lower()
+        if search_text in date_str:
+            return True
+        
+        return False
+    
+    def on_search_text_changed(self, text):
+        """搜索文本改变时的处理"""
+        search_text = text.strip().lower()
+        self.update_invoice_list(search_text=search_text)
+    
+    def clear_search(self):
+        """清除搜索"""
+        if hasattr(self, 'search_input'):
+            self.search_input.clear()
+            self.update_invoice_list(search_text='')
+    
+    def resizeEvent(self, event):
+        """窗口尺寸变化时的处理"""
+        super().resizeEvent(event)
+
+    def display_invoice_details(self, invoice):
+        """显示发票基本信息"""
+        file_path = invoice.get('file_path', '')
+        file_exists = file_path and os.path.exists(file_path)
+        file_status = '✓ 文件存在' if file_exists else '✗ 文件不存在'
+        
+        # 获取标签信息
+        tags = invoice.get('tags', [])
+        tags_text = ', '.join(tags) if tags else '无'
+        
+        # 获取验证状态
+        validation = invoice.get('validation')
+        if validation:
+            if validation['is_valid']:
+                validation_status = '✓ 验证通过'
+                if validation['warnings']:
+                    validation_status += f'（{len(validation["warnings"])} 个警告）'
+            else:
+                validation_status = f'✗ 验证失败（{len(validation["errors"])} 个错误'
+                if validation['warnings']:
+                    validation_status += f'，{len(validation["warnings"])} 个警告'
+                validation_status += '）'
+        else:
+            validation_status = '未验证'
+        
+        details = f"""
+发票号码: {invoice.get('invoice_number', '未知')}
+开票日期: {invoice.get('date', '未知')}
+销售方: {invoice.get('seller', '未知')}
+购买方: {invoice.get('buyer', '未知')}
+总金额: ¥{invoice.get('total_amount', 0):.2f}
+标签: {tags_text}
+验证状态: {validation_status}
+文件路径: {file_path}
+文件状态: {file_status}
+        """
+        self.detail_text.setPlainText(details.strip())
+        
+        # 更新文件管理按钮状态
+        has_file = bool(file_path)
+        self.open_file_btn.setEnabled(has_file and file_exists)
+        self.show_in_explorer_btn.setEnabled(has_file and file_exists)
+        self.copy_path_btn.setEnabled(has_file)
+        self.relink_file_btn.setEnabled(has_file)
+        self.copy_file_btn.setEnabled(has_file and file_exists)
+        
+        # 更新标签管理按钮状态
+        if hasattr(self, 'manage_tags_btn'):
+            self.manage_tags_btn.setEnabled(True)
+        
+        # 更新验证按钮状态
+        if hasattr(self, 'validate_btn'):
+            self.validate_btn.setEnabled(True)
+        
+        # 更新AI按钮状态
+        if hasattr(self, 'ai_analyze_btn'):
+            self.ai_analyze_btn.setEnabled(True)
+        if hasattr(self, 'ai_suggest_btn'):
+            self.ai_suggest_btn.setEnabled(True)
+        if hasattr(self, 'ai_review_btn'):
+            self.ai_review_btn.setEnabled(True)
+
+    def display_invoice_items(self, invoice):
+        """显示商品明细"""
+        items = invoice.get('items', [])
+        self.items_table.setRowCount(len(items))
+
+        for row, item in enumerate(items):
+            self.items_table.setItem(row, 0, QTableWidgetItem(item.get('category', '')))
+            self.items_table.setItem(row, 1, QTableWidgetItem(item.get('name', '')))
+            self.items_table.setItem(row, 2, QTableWidgetItem(str(item.get('quantity', 1))))
+            self.items_table.setItem(row, 3, QTableWidgetItem(f"{item.get('price', 0):.2f}"))
+            self.items_table.setItem(row, 4, QTableWidgetItem(f"{item.get('amount', 0):.2f}"))
+            self.items_table.setItem(row, 5, QTableWidgetItem(item.get('spec', '')))
+
+    def on_item_changed(self, row, column):
+        """商品信息改变"""
+        if column == 0:  # 分类列
+            item = self.items_table.item(row, column)
+            if item:
+                # 更新发票数据
+                current_invoice_index = self.invoice_list.currentRow()
+                if current_invoice_index >= 0 and current_invoice_index < len(self.invoices):
+                    invoice = self.invoices[current_invoice_index]
+                    if 'items' in invoice and row < len(invoice['items']):
+                        invoice['items'][row]['category'] = item.text()
+
+    def edit_category(self):
+        """修改分类"""
+        current_row = self.items_table.currentRow()
+        if current_row >= 0:
+            categories = ['耗材', '设备', '其他']
+            category, ok = QInputDialog.getItem(self, '选择分类', '分类:', categories, 0, False)
+            if ok:
+                self.items_table.setItem(current_row, 0, QTableWidgetItem(category))
+
+    def add_item(self):
+        """添加商品"""
+        current_invoice_index = self.invoice_list.currentRow()
+        if current_invoice_index >= 0:
+            row_count = self.items_table.rowCount()
+            self.items_table.insertRow(row_count)
+
+            # 默认值
+            self.items_table.setItem(row_count, 0, QTableWidgetItem('其他'))
+            self.items_table.setItem(row_count, 1, QTableWidgetItem('新商品'))
+            self.items_table.setItem(row_count, 2, QTableWidgetItem('1'))
+            self.items_table.setItem(row_count, 3, QTableWidgetItem('0.00'))
+            self.items_table.setItem(row_count, 4, QTableWidgetItem('0.00'))
+            self.items_table.setItem(row_count, 5, QTableWidgetItem(''))
+
+            # 更新数据
+            invoice = self.invoices[current_invoice_index]
+            if 'items' not in invoice:
+                invoice['items'] = []
+            invoice['items'].append({
+                'category': '其他',
+                'name': '新商品',
+                'quantity': 1,
+                'price': 0.0,
+                'amount': 0.0,
+                'spec': ''
+            })
+
+    def delete_item(self):
+        """删除商品"""
+        current_row = self.items_table.currentRow()
+        if current_row >= 0:
+            self.items_table.removeRow(current_row)
+
+            # 更新数据
+            current_invoice_index = self.invoice_list.currentRow()
+            if current_invoice_index >= 0:
+                invoice = self.invoices[current_invoice_index]
+                if 'items' in invoice and current_row < len(invoice['items']):
+                    del invoice['items'][current_row]
+
+    def export_bill(self):
+        """导出账单"""
+        if not self.invoices:
+            QMessageBox.warning(self, '警告', '没有发票数据可导出')
+            return
+
+        # 从配置读取默认导出路径
+        cfg = load_config()
+        default_path = cfg.get('export_path', '')
+        if default_path and os.path.exists(default_path):
+            default_file = os.path.join(default_path, '账单.xlsx')
+        else:
+            default_file = '账单.xlsx'
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, '保存账单', default_file, 'Excel文件 (*.xlsx);;所有文件 (*.*)'
+        )
+
+        if not file_path:
+            return
+
+        try:
+            self.generate_bill_excel(file_path)
+            QMessageBox.information(self, '成功', f'账单已保存到: {file_path}')
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'导出失败: {str(e)}')
+
+    def generate_bill_excel(self, file_path):
+        """生成账单Excel文件"""
+        bill_data = []
+        # total_amount 按每张发票的「价税合计」求和（含税），
+        # 而不是按明细的未税金额累加，避免漏算税额。
+        total_amount = 0.0
+
+        for invoice in self.invoices:
+            # 累加每张发票的价税合计（含税）
+            total_amount += float(invoice.get('total_amount', 0) or 0)
+
+            # 逐行展开商品明细，用于导出账单
+            items = invoice.get('items', [])
+            for item in items:
+                bill_data.append({
+                    '一级产品分类*': item.get('category', '其他'),
+                    '商品名称*': item.get('name', ''),
+                    '单价（元）*': item.get('price', 0),
+                    '数量*': item.get('quantity', 1),
+                    '包装单位': item.get('unit', '个'),
+                    '品 牌': '',
+                    '货号': '',
+                    '规格': item.get('spec', '')
+                })
+
+        # 添加汇总行
+        if bill_data:
+            bill_data.append({
+                '一级产品分类*': '',
+                '商品名称*': '合计',
+                '单价（元）*': '',
+                '数量*': '',
+                '包装单位': '',
+                '品 牌': '',
+                '货号': '',
+                '规格': f'总金额: ¥{total_amount:.2f}'
+            })
+
+            df = pd.DataFrame(bill_data)
+            df.to_excel(file_path, index=False)
+
+    def clear_data(self):
+        """清空数据"""
+        # 检查配置是否需要确认
+        cfg = load_config()
+        if cfg.get('confirm_delete', True):
+            reply = QMessageBox.question(self, '确认', '确定要清空所有数据吗？',
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        
+        # 执行清空
+        self.invoices.clear()
+        # 清空搜索框
+        if hasattr(self, 'search_input'):
+            self.search_input.clear()
+        self.invoice_list.clear()
+        self.detail_text.clear()
+        self.items_table.setRowCount(0)
+        self.export_btn.setEnabled(False)
+        self.total_label.setText('总金额：¥0.00')
+        if hasattr(self, 'count_label'):
+            self.count_label.setText('共 0 张发票')
+        # 清空统计视图
+        self.update_stats_view()
+        self.status_bar.showMessage('数据已清空')
+
+    # ================== 发票去重与自动保存 / 加载功能 ==================
+    def _is_duplicate_invoice(self, new_invoice):
+        """
+        判断一张新发票是否与现有发票重复。
+        优先依据：发票号码 + 开票日期；
+        退而求其次：文件路径完全相同。
+        """
+        new_no = (new_invoice.get('invoice_number') or '').strip()
+        new_date = (new_invoice.get('date') or '').strip()
+        new_path = new_invoice.get('file_path')
+
+        for inv in self.invoices:
+            old_no = (inv.get('invoice_number') or '').strip()
+            old_date = (inv.get('date') or '').strip()
+            old_path = inv.get('file_path')
+
+            # 发票号 + 开票日期都存在且完全相同，则认为是同一张发票
+            if new_no and old_no and new_date and old_date:
+                if new_no == old_no and new_date == old_date:
+                    return True
+
+            # 否则如果文件路径完全一致，也视作重复
+            if new_path and old_path and new_path == old_path:
+                return True
+
+        return False
+
+    def _get_autosave_path(self):
+        """获取自动保存文件的路径（程序所在目录下的 JSON 文件）"""
+        try:
+            base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        except Exception:
+            base_dir = os.getcwd()
+        return os.path.join(base_dir, 'invoices_autosave.json')
+
+    def save_invoices(self):
+        """将当前发票数据自动保存到本地 JSON 文件"""
+        autosave_path = self._get_autosave_path()
+        try:
+            with open(autosave_path, 'w', encoding='utf-8') as f:
+                # self.invoices 结构只包含基本类型（字符串、数字、列表、字典），可直接 JSON 序列化
+                json.dump(self.invoices, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            # 自动保存失败不打断用户操作，仅在控制台输出
+            print(f'自动保存发票数据失败: {e}')
+
+    def load_invoices(self):
+        """启动时自动加载上一次保存的发票数据"""
+        autosave_path = self._get_autosave_path()
+        if not os.path.exists(autosave_path):
+            return
+
+        try:
+            with open(autosave_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                self.invoices = data
+                # 确保旧数据也有 tags 字段
+                for invoice in self.invoices:
+                    if 'tags' not in invoice:
+                        invoice['tags'] = []
+                self.update_invoice_list()
+                self.update_total_label()
+                self.update_stats_view()
+                self.export_btn.setEnabled(bool(self.invoices))
+                if self.invoices:
+                    self.status_bar.showMessage(f'已自动加载上次的 {len(self.invoices)} 张发票数据')
+        except Exception as e:
+            print(f'自动加载发票数据失败: {e}')
+
+    def closeEvent(self, event):
+        """窗口关闭前自动保存当前发票数据"""
+        self.save_invoices()
+        super().closeEvent(event)
+
+    def show_help_info(self):
+        """显示说明对话框（免责声明和开发者信息）"""
+        dialog = HelpDialog(self)
+        dialog.exec_()
+
+    def open_settings(self):
+        """打开设置对话框"""
+        dialog = SettingsDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            config = load_config()
+            # 获取旧配置用于判断是否改变了 API key
+            old_api_key = config.get('deepseek_api_key', '')
+            # 合并新设置
+            new_settings = dialog.get_settings()
+            config.update(new_settings)
+            new_api_key = new_settings.get('deepseek_api_key', '')
+            
+            if save_config(config):
+                # 如果 API key 改变了，重新初始化 AI 客户端
+                if old_api_key != new_api_key:
+                    self.init_ai_client()
+                
+                QMessageBox.information(
+                    self,
+                    '设置已保存',
+                    '设置已保存。\n\n如果修改了 API Key，AI 功能将立即使用新的配置。'
+                )
+            else:
+                QMessageBox.warning(self, '保存失败', '无法保存配置文件，请检查文件权限。')
+
+    # ================== 发票文件管理 ==================
+    def get_current_invoice(self):
+        """获取当前选中的发票"""
+        index = self.invoice_list.currentRow()
+        if index < 0 or index >= len(self.invoices):
+            return None
+        return self.invoices[index]
+
+    def open_invoice_file(self):
+        """用系统默认程序打开发票PDF文件"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        file_path = invoice.get('file_path', '')
+        if not file_path:
+            QMessageBox.warning(self, '错误', '该发票没有关联文件路径')
+            return
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, '文件不存在', f'找不到文件：\n{file_path}\n\n请使用"重新关联"功能指定正确的文件路径。')
+            return
+        
+        try:
+            # Windows 系统使用 os.startfile，跨平台可以使用 subprocess
+            if sys.platform == 'win32':
+                os.startfile(file_path)
+            else:
+                import subprocess
+                subprocess.run(['xdg-open', file_path] if sys.platform == 'linux' else ['open', file_path])
+        except Exception as e:
+            QMessageBox.critical(self, '打开失败', f'无法打开文件：\n{str(e)}')
+
+    def show_file_in_explorer(self):
+        """在资源管理器中显示文件"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        file_path = invoice.get('file_path', '')
+        if not file_path:
+            QMessageBox.warning(self, '错误', '该发票没有关联文件路径')
+            return
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, '文件不存在', f'找不到文件：\n{file_path}')
+            return
+        
+        try:
+            # Windows 系统
+            if sys.platform == 'win32':
+                os.startfile(os.path.dirname(file_path))
+            else:
+                import subprocess
+                folder = os.path.dirname(file_path)
+                subprocess.run(['xdg-open', folder] if sys.platform == 'linux' else ['open', folder])
+        except Exception as e:
+            QMessageBox.critical(self, '操作失败', f'无法打开文件夹：\n{str(e)}')
+
+    def copy_file_path(self):
+        """复制文件路径到剪贴板"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        file_path = invoice.get('file_path', '')
+        if not file_path:
+            QMessageBox.warning(self, '错误', '该发票没有关联文件路径')
+            return
+        
+        try:
+            from PyQt5.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+            clipboard.setText(file_path)
+            QMessageBox.information(self, '已复制', f'文件路径已复制到剪贴板：\n{file_path}')
+        except Exception as e:
+            QMessageBox.critical(self, '复制失败', f'无法复制路径：\n{str(e)}')
+
+    def relink_invoice_file(self):
+        """重新关联发票文件（如果文件移动或重命名了）"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        old_path = invoice.get('file_path', '')
+        
+        # 如果旧路径存在，从该目录开始选择
+        start_dir = os.path.dirname(old_path) if old_path and os.path.exists(os.path.dirname(old_path)) else ''
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            '重新关联发票文件',
+            start_dir,
+            'PDF文件 (*.pdf);;所有文件 (*.*)'
+        )
+        
+        if not file_path:
+            return
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, '错误', '选择的文件不存在')
+            return
+        
+        # 更新发票的文件路径
+        invoice['file_path'] = file_path
+        
+        # 刷新显示
+        self.display_invoice_details(invoice)
+        self.update_preview_for_invoice(invoice)
+        self.update_invoice_list()
+        
+        # 保存数据
+        self.save_invoices()
+        
+        QMessageBox.information(self, '成功', '发票文件已重新关联')
+
+    def copy_invoice_file(self):
+        """复制发票文件到指定位置"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        file_path = invoice.get('file_path', '')
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, '文件不存在', '找不到发票文件，无法复制')
+            return
+        
+        # 选择目标文件夹
+        target_dir = QFileDialog.getExistingDirectory(
+            self,
+            '选择目标文件夹',
+            os.path.dirname(file_path)
+        )
+        
+        if not target_dir:
+            return
+        
+        try:
+            file_name = os.path.basename(file_path)
+            target_path = os.path.join(target_dir, file_name)
+            
+            # 如果目标文件已存在，询问是否覆盖
+            if os.path.exists(target_path):
+                reply = QMessageBox.question(
+                    self,
+                    '文件已存在',
+                    f'目标位置已存在同名文件：\n{target_path}\n\n是否覆盖？',
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            
+            # 复制文件
+            import shutil
+            shutil.copy2(file_path, target_path)
+            QMessageBox.information(self, '成功', f'文件已复制到：\n{target_path}')
+        except Exception as e:
+            QMessageBox.critical(self, '复制失败', f'无法复制文件：\n{str(e)}')
+
+    def manage_invoice_tags(self):
+        """管理发票标签"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        # 获取当前标签
+        current_tags = invoice.get('tags', [])
+        
+        # 打开标签管理对话框
+        dialog = TagsDialog(self, current_tags)
+        if dialog.exec_() == QDialog.Accepted:
+            # 更新发票标签
+            new_tags = dialog.get_tags()
+            invoice['tags'] = new_tags
+            
+            # 刷新显示
+            self.display_invoice_details(invoice)
+            self.update_invoice_list()
+            
+            # 保存数据
+            self.save_invoices()
+            
+            QMessageBox.information(self, '成功', '标签已更新')
+
+    def validate_current_invoice(self):
+        """验证当前选中的发票"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        # 执行验证
+        validation_result = self.parser.validate_invoice(invoice, self.invoices)
+        invoice['validation'] = validation_result
+        
+        # 刷新显示
+        self.display_invoice_details(invoice)
+        self.update_invoice_list()
+        self.save_invoices()
+        
+        # 显示验证结果对话框
+        self.show_validation_result(invoice, validation_result)
+    
+    def show_validation_result(self, invoice, validation_result):
+        """显示验证结果对话框"""
+        invoice_number = invoice.get('invoice_number', '未知')
+        
+        if validation_result['is_valid'] and not validation_result['warnings']:
+            QMessageBox.information(
+                self,
+                '验证通过',
+                f'发票 {invoice_number} 验证通过，所有检查项均正常。'
+            )
+        else:
+            msg = f'发票 {invoice_number} 验证结果：\n\n'
+            
+            if not validation_result['is_valid']:
+                msg += '❌ 错误（必须修复）：\n'
+                for error in validation_result['errors']:
+                    msg += f'  • {error}\n'
+                msg += '\n'
+            
+            if validation_result['warnings']:
+                msg += '⚠️ 警告（建议检查）：\n'
+                for warning in validation_result['warnings']:
+                    msg += f'  • {warning}\n'
+            
+            msg += f'\n验证时间：{validation_result.get("checked_at", "未知")}'
+            
+            if validation_result['is_valid']:
+                QMessageBox.warning(self, '验证完成（有警告）', msg)
+            else:
+                QMessageBox.critical(self, '验证失败', msg)
+    
+    def ai_analyze_invoice(self):
+        """使用AI分析当前发票（异步执行）"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        # 如果已有线程在运行，先停止
+        if self.ai_worker and self.ai_worker.isRunning():
+            self.ai_worker.terminate()
+            self.ai_worker.wait()
+        
+        # 禁用按钮，防止重复点击
+        if hasattr(self, 'ai_analyze_btn'):
+            self.ai_analyze_btn.setEnabled(False)
+        
+        # 显示加载提示
+        self.status_bar.showMessage('AI正在分析发票，请稍候...')
+        
+        # 创建工作线程
+        self.ai_worker = AIWorker(self.ai_client, 'analyze_invoice', invoice, self.invoices)
+        self.ai_worker.finished.connect(lambda result: self._on_ai_analyze_finished(result))
+        self.ai_worker.error.connect(lambda error: self._on_ai_error('AI分析', error))
+        self.ai_worker.start()
+    
+    def _on_ai_analyze_finished(self, result):
+        """AI分析完成回调"""
+        # 恢复按钮状态
+        if hasattr(self, 'ai_analyze_btn'):
+            self.ai_analyze_btn.setEnabled(True)
+        
+        # 显示分析结果对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle('AI分析结果')
+        dialog.setModal(True)
+        dialog.resize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel('AI分析结果：')
+        label.setStyleSheet('font-weight: bold; font-size: 12pt;')
+        layout.addWidget(label)
+        
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(result)
+        layout.addWidget(text_edit)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec_()
+        self.status_bar.showMessage('AI分析完成')
+    
+    def ai_suggest_invoice(self):
+        """使用AI为当前发票提供建议（异步执行）"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        # 如果已有线程在运行，先停止
+        if self.ai_worker and self.ai_worker.isRunning():
+            self.ai_worker.terminate()
+            self.ai_worker.wait()
+        
+        # 禁用按钮，防止重复点击
+        if hasattr(self, 'ai_suggest_btn'):
+            self.ai_suggest_btn.setEnabled(False)
+        
+        # 显示加载提示
+        self.status_bar.showMessage('AI正在生成建议，请稍候...')
+        
+        # 创建工作线程
+        self.ai_worker = AIWorker(self.ai_client, 'suggest_tags_and_actions', invoice, self.invoices)
+        self.ai_worker.finished.connect(lambda result: self._on_ai_suggest_finished(result))
+        self.ai_worker.error.connect(lambda error: self._on_ai_error('AI建议', error))
+        self.ai_worker.start()
+    
+    def _on_ai_suggest_finished(self, result):
+        """AI建议完成回调"""
+        # 恢复按钮状态
+        if hasattr(self, 'ai_suggest_btn'):
+            self.ai_suggest_btn.setEnabled(True)
+        
+        # 显示建议结果对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle('AI建议')
+        dialog.setModal(True)
+        dialog.resize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel('AI建议：')
+        label.setStyleSheet('font-weight: bold; font-size: 12pt;')
+        layout.addWidget(label)
+        
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(result)
+        layout.addWidget(text_edit)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec_()
+        self.status_bar.showMessage('AI建议生成完成')
+    
+    def ai_review_invoice(self):
+        """使用AI审核当前发票（异步执行）"""
+        invoice = self.get_current_invoice()
+        if not invoice:
+            QMessageBox.warning(self, '提示', '请先选择一张发票')
+            return
+        
+        # 如果已有线程在运行，先停止
+        if self.ai_worker and self.ai_worker.isRunning():
+            self.ai_worker.terminate()
+            self.ai_worker.wait()
+        
+        # 禁用按钮，防止重复点击
+        if hasattr(self, 'ai_review_btn'):
+            self.ai_review_btn.setEnabled(False)
+        
+        # 显示加载提示
+        self.status_bar.showMessage('AI正在审核发票，请稍候...')
+        
+        # 获取已有的验证结果（如果有）
+        validation_result = invoice.get('validation')
+        
+        # 创建工作线程
+        self.ai_worker = AIWorker(self.ai_client, 'review_invoice', invoice, validation_result)
+        self.ai_worker.finished.connect(lambda result: self._on_ai_review_finished(result))
+        self.ai_worker.error.connect(lambda error: self._on_ai_error('AI审核', error))
+        self.ai_worker.start()
+    
+    def _on_ai_review_finished(self, result):
+        """AI审核完成回调"""
+        # 恢复按钮状态
+        if hasattr(self, 'ai_review_btn'):
+            self.ai_review_btn.setEnabled(True)
+        
+        # 显示审核结果对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle('AI审核结果')
+        dialog.setModal(True)
+        dialog.resize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel('AI审核意见：')
+        label.setStyleSheet('font-weight: bold; font-size: 12pt;')
+        layout.addWidget(label)
+        
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(result)
+        layout.addWidget(text_edit)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec_()
+        self.status_bar.showMessage('AI审核完成')
+    
+    def ai_analyze_all_invoices(self):
+        """使用AI分析所有发票数据（异步执行）"""
+        if not self.invoices:
+            QMessageBox.warning(self, '提示', '没有发票数据可供分析')
+            return
+        
+        # 如果已有线程在运行，先停止
+        if self.ai_worker and self.ai_worker.isRunning():
+            self.ai_worker.terminate()
+            self.ai_worker.wait()
+        
+        # 禁用按钮，防止重复点击
+        if hasattr(self, 'ai_analyze_all_btn'):
+            self.ai_analyze_all_btn.setEnabled(False)
+        
+        # 显示加载提示
+        self.status_bar.showMessage('AI正在分析所有发票数据，请稍候...')
+        
+        # 创建工作线程
+        self.ai_worker = AIWorker(self.ai_client, 'analyze_all_invoices', self.invoices)
+        self.ai_worker.finished.connect(lambda result: self._on_ai_analyze_all_finished(result))
+        self.ai_worker.error.connect(lambda error: self._on_ai_error('AI整体分析', error))
+        self.ai_worker.start()
+    
+    def _on_ai_analyze_all_finished(self, result):
+        """AI整体分析完成回调"""
+        # 恢复按钮状态
+        if hasattr(self, 'ai_analyze_all_btn'):
+            self.ai_analyze_all_btn.setEnabled(True)
+        
+        # 显示分析结果对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle('AI整体分析报告')
+        dialog.setModal(True)
+        dialog.resize(700, 500)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel('AI整体分析报告：')
+        label.setStyleSheet('font-weight: bold; font-size: 12pt;')
+        layout.addWidget(label)
+        
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(result)
+        layout.addWidget(text_edit)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec_()
+        self.status_bar.showMessage('AI整体分析完成')
+    
+    def _on_ai_error(self, operation_name, error_msg):
+        """AI操作错误回调"""
+        # 恢复所有AI按钮状态
+        if hasattr(self, 'ai_analyze_btn'):
+            self.ai_analyze_btn.setEnabled(True)
+        if hasattr(self, 'ai_suggest_btn'):
+            self.ai_suggest_btn.setEnabled(True)
+        if hasattr(self, 'ai_review_btn'):
+            self.ai_review_btn.setEnabled(True)
+        if hasattr(self, 'ai_analyze_all_btn'):
+            self.ai_analyze_all_btn.setEnabled(True)
+        
+        QMessageBox.critical(self, f'{operation_name}失败', f'{operation_name}过程中出现错误：\n{error_msg}')
+        self.status_bar.showMessage(f'{operation_name}失败')
+
+    # ================== 购买记录 OCR 匹配与重命名 ==================
+    def match_purchase_records(self):
+        """
+        批量从购买记录图片中 OCR 识别“实付金额”，
+        与当前发票的总金额进行匹配，并按
+        「发票号_金额_原文件名」格式重命名图片。
+        """
+        # 仅在用户点击「匹配购买记录并重命名」时，才初始化/检测 Tesseract
+        if not init_tesseract_or_warn(self):
+            return
+        if not self.invoices:
+            QMessageBox.warning(self, '提示', '请先导入并解析发票，再进行购买记录匹配。')
+            return
+
+        folder = QFileDialog.getExistingDirectory(self, '选择购买记录图片所在文件夹', '')
+        if not folder:
+            return
+
+        image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+        files = []
+        for name in os.listdir(folder):
+            ext = os.path.splitext(name)[1].lower()
+            if ext in image_exts:
+                files.append(os.path.join(folder, name))
+
+        if not files:
+            QMessageBox.information(self, '提示', '所选文件夹中没有找到支持的图片文件（jpg/png等）。')
+            return
+
+        # 使用后台线程执行 OCR 匹配，避免阻塞界面
+        self.status_bar.showMessage('正在匹配购买记录，请稍候...')
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.match_records_btn.setEnabled(False)
+
+        self.match_worker = PurchaseRecordMatcher(folder, files, self.invoices)
+        self.match_worker.progress.connect(self.update_progress)
+        self.match_worker.finished.connect(self.on_match_finished)
+        self.match_worker.error.connect(self.on_match_error)
+        self.match_worker.start()
+
+    def on_match_finished(self, result):
+        """购买记录匹配线程完成"""
+        QApplication.restoreOverrideCursor()
+        self.progress_bar.setVisible(False)
+        self.match_records_btn.setEnabled(True)
+
+        total = result.get("total", 0)
+        matched_count = result.get("matched", 0)
+        unmatched_files = result.get("unmatched_files", []) or []
+        error_files = result.get("error_files", []) or []
+
+        msg_lines = [
+            f"共扫描购买记录图片：{total} 个",
+            f"成功匹配并重命名：{matched_count} 个",
+        ]
+        if unmatched_files:
+            msg_lines.append(f"未找到匹配发票：{len(unmatched_files)} 个")
+        if error_files:
+            msg_lines.append(f"OCR或重命名出错：{len(error_files)} 个")
+
+        detail_text = ""
+        if unmatched_files:
+            detail_text += "未匹配文件示例：\n" + "\n".join(unmatched_files[:10])
+            if len(unmatched_files) > 10:
+                detail_text += f"\n…… 等 {len(unmatched_files)} 个\n"
+        if error_files:
+            if detail_text:
+                detail_text += "\n"
+            detail_text += "出错文件示例：\n" + "\n".join(error_files[:10])
+            if len(error_files) > 10:
+                detail_text += f"\n…… 等 {len(error_files)} 个\n"
+
+        self.status_bar.showMessage('购买记录匹配完成。')
+
+        QMessageBox.information(
+            self,
+            '匹配完成',
+            "\n".join(msg_lines) + ("\n\n" + detail_text if detail_text else "")
+        )
+
+    def on_match_error(self, error_msg):
+        """购买记录匹配过程中出错"""
+        QApplication.restoreOverrideCursor()
+        self.progress_bar.setVisible(False)
+        self.match_records_btn.setEnabled(True)
+        self.status_bar.showMessage('购买记录匹配出错。')
+        QMessageBox.warning(self, '匹配错误', error_msg)
+
+
+    def _extract_paid_amount_from_image(self, img_path):
+        """
+        使用 OCR 从购买记录图片中提取“实付金额”。
+        优先匹配包含“实付/实收/实付金额/支付金额”等关键词的行上的金额；
+        若未找到，再从整段文本中取最大金额作为候选。
+        """
+        try:
+            image = Image.open(img_path)
+        except Exception as e:
+            print(f"OCR 打开图片失败 {img_path}: {e}")
+            return None
+
+        try:
+            text = ocr_image_to_string(image)
+        except Exception as e:
+            print(f"OCR 识别失败 {img_path}: {e}")
+            return None
+
+        if not text:
+            return None
+
+        lines = text.splitlines()
+        amount_pattern = re.compile(r'([0-9]+(?:\.[0-9]{1,2})?)')
+
+        # 1. 优先在含“实付/实收/实付金额/支付金额”等关键词的行里找金额
+        keywords = ['实付', '实收', '实付金额', '支付金额', '应付金额', '合计', '总计']
+        candidate_amounts = []
+
+        for line in lines:
+            if any(k in line for k in keywords):
+                for m in amount_pattern.finditer(line.replace(',', '')):
+                    try:
+                        val = float(m.group(1))
+                        candidate_amounts.append(val)
+                    except ValueError:
+                        continue
+
+        if candidate_amounts:
+            # 取该行中最大的一个金额作为「实付金额」候选
+            return max(candidate_amounts)
+
+        # 2. 如果关键词行找不到，再从整段文本中取最大的金额
+        all_amounts = []
+        for line in lines:
+            for m in amount_pattern.finditer(line.replace(',', '')):
+                try:
+                    val = float(m.group(1))
+                    all_amounts.append(val)
+                except ValueError:
+                    continue
+
+        if all_amounts:
+            return max(all_amounts)
+
+        return None
+
+    def _find_invoice_by_amount(self, amount, tol=0.01):
+        """
+        根据实付金额在当前发票列表中查找匹配发票。
+        若存在多张金额相同的发票，这里简单返回第一张，避免自动做出含糊匹配。
+        """
+        if amount is None:
+            return None
+
+        # 从配置中读取匹配金额容差设置
+        cfg = load_config()
+        tol = float(cfg.get('match_tolerance', tol) or tol)
+
+        for inv in self.invoices:
+            try:
+                total = float(inv.get('total_amount', 0) or 0)
+            except Exception:
+                continue
+
+            if abs(total - amount) <= tol:
+                return inv
+
+        return None
+
+
+def main():
+    # 修复Qt平台插件路径问题（必须在创建QApplication之前设置）
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的exe
+        base_path = sys._MEIPASS
+    else:
+        # 如果是开发环境
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # 设置Qt插件路径（使用环境变量和QCoreApplication两种方法确保兼容性）
+    plugin_path = os.path.join(base_path, 'PyQt5', 'Qt5', 'plugins')
+    if os.path.exists(plugin_path):
+        os.environ['QT_PLUGIN_PATH'] = plugin_path
+        # 使用QCoreApplication的方法（需要在创建QApplication之前）
+        QCoreApplication.setLibraryPaths([plugin_path])
+    
+    # pdfium路径已在文件开头设置，这里不需要重复设置
+    
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+
+    # 全局现代化样式（浅色主题，参考主流前端设计语言：Ant Design / Material）
+    app.setStyleSheet("""
+        /* 全局基础字体与背景 */
+        QWidget {
+            font-family: 'Microsoft YaHei', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 10pt;
+            color: #1f2933;
+        }
+
+        QMainWindow {
+            background-color: #f3f4f6;
+        }
+
+        /* 顶部导航栏（仿 Web 顶部菜单栏） */
+        QWidget#topNav {
+            background-color: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        QPushButton#topNavButton {
+            background-color: transparent;
+            border: none;
+            padding: 6px 14px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+
+        QPushButton#topNavButton:hover {
+            background-color: #f3f4f6;
+            color: #111827;
+        }
+
+        QPushButton#topNavButton:checked {
+            color: #2563eb;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 4px; /* 边框占用 2px，整体高度保持一致 */
+        }
+
+        /* 顶部右侧开发者信息 */
+        QLabel#devInfo {
+            color: #9ca3af;
+            font-size: 9pt;
+        }
+
+        /* 顶部标题与汇总区域 */
+        QLabel#appTitle {
+            font-size: 15pt;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        QLabel#summaryLabel {
+            color: #6b7280;
+        }
+
+        /* 分组框（卡片式容器） */
+        QGroupBox {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            margin-top: 10px;
+            background-color: #ffffff;
+        }
+
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 6px;
+            color: #4b5563;
+            font-weight: 600;
+        }
+
+        /* 按钮：主流前端扁平化+悬浮效果 */
+        QPushButton {
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            padding: 6px 14px;
+            color: #374151;
+        }
+
+        QPushButton:hover {
+            background-color: #eff6ff;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+        }
+
+        QPushButton:pressed {
+            background-color: #dbeafe;
+            border-color: #2563eb;
+        }
+
+        QPushButton:disabled {
+            background-color: #f3f4f6;
+            color: #9ca3af;
+            border-color: #e5e7eb;
+        }
+
+        /* 主按钮（primary） */
+        QPushButton[btnType="primary"] {
+            background-color: #ffffff;
+            border-color: #2563eb;
+            color: #000000;
+            font-weight: 600;
+        }
+
+        QPushButton[btnType="primary"]:hover {
+            background-color: #eff6ff;
+            border-color: #1d4ed8;
+            color: #000000;
+        }
+
+        QPushButton[btnType="primary"]:pressed {
+            background-color: #dbeafe;
+            border-color: #1e40af;
+            color: #000000;
+        }
+
+        QPushButton[btnType="primary"]:disabled {
+            background-color: #f3f4f6;
+            border-color: #93c5fd;
+            color: #9ca3af;
+        }
+
+        /* 危险按钮（danger） */
+        QPushButton[btnType="danger"] {
+            background-color: #fee2e2;
+            border-color: #fca5a5;
+            color: #b91c1c;
+        }
+
+        QPushButton[btnType="danger"]:hover {
+            background-color: #fecaca;
+            border-color: #f87171;
+            color: #991b1b;
+        }
+
+        QPushButton[btnType="danger"]:pressed {
+            background-color: #fca5a5;
+            border-color: #ef4444;
+        }
+
+        /* 幽灵按钮（ghost）：无背景，仅边框 + 文本色变化，适合次要操作 */
+        QPushButton[btnType="ghost"] {
+            background-color: transparent;
+            border-color: #d1d5db;
+            color: #4b5563;
+        }
+
+        QPushButton[btnType="ghost"]:hover {
+            background-color: #f3f4f6;
+            border-color: #9ca3af;
+            color: #111827;
+        }
+
+        /* 左侧发票列表：类似邮件列表的选中/悬停高亮 */
+        QListWidget {
+            background-color: #ffffff;
+            border: 1px solid #e5e7eb;
+            outline: none;
+        }
+
+        QListWidget::item {
+            padding: 4px 4px;
+        }
+
+        QListWidget::item:hover {
+            background-color: #f3f4ff;
+        }
+
+        QListWidget::item:selected {
+            background-color: #2563eb;
+            color: #ffffff;
+        }
+
+        /* 文本编辑区域（详情） */
+        QTextEdit {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+        }
+
+        /* 输入框与下拉框：统一的边框与聚焦高亮效果 */
+        QLineEdit, QComboBox {
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            padding: 4px 6px;
+        }
+
+        QLineEdit:focus, QComboBox:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.15);
+        }
+
+        QComboBox::drop-down {
+            border: none;
+            width: 20px;
+        }
+
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 1px solid #e5e7eb;
+            width: 10px;
+        }
+
+        /* 表格：浅色条纹 + 细边框 + 固定表头 */
+        QTableWidget {
+            background-color: #ffffff;
+            alternate-background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            gridline-color: #e5e7eb;
+        }
+
+        QHeaderView::section {
+            background-color: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            padding: 6px 4px;
+            font-weight: 600;
+            color: #4b5563;
+        }
+
+        QTableWidget::item:selected {
+            background-color: #2563eb;
+            color: #ffffff;
+        }
+
+        QTableWidget::item:hover {
+            background-color: #e5effe;
+        }
+
+        /* QScrollArea 中的白色背景，避免灰块 */
+        QScrollArea {
+            border: none;
+            background-color: transparent;
+        }
+
+        QScrollArea > QWidget > QWidget {
+            background-color: transparent;
+        }
+
+        /* 滚动条：细窄、圆角，类似网页 UI */
+        QScrollBar:vertical {
+            background: transparent;
+            width: 8px;
+            margin: 0px;
+        }
+
+        QScrollBar::handle:vertical {
+            background: #d1d5db;
+            min-height: 24px;
+            border-radius: 4px;
+        }
+
+        QScrollBar::handle:vertical:hover {
+            background: #9ca3af;
+        }
+
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+
+        QScrollBar:horizontal {
+            background: transparent;
+            height: 8px;
+            margin: 0px;
+        }
+
+        QScrollBar::handle:horizontal {
+            background: #d1d5db;
+            min-width: 24px;
+            border-radius: 4px;
+        }
+
+        QScrollBar::handle:horizontal:hover {
+            background: #9ca3af;
+        }
+
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {
+            width: 0px;
+        }
+
+        /* 状态栏 */
+        QStatusBar {
+            background-color: #f3f4f6;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        /* 进度条样式：轻量的蓝色进度条 */
+        QProgressBar {
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            background-color: #f9fafb;
+            text-align: center;
+            height: 10px;
+        }
+
+        QProgressBar::chunk {
+            background-color: #2563eb;
+            border-radius: 4px;
+        }
+
+        /* Tooltip：浅色小气泡 */
+        QToolTip {
+            background-color: #111827;
+            color: #f9fafb;
+            border: 0px;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+    """)
+
+    # 设置应用程序信息
+    app.setApplicationName('发票自动管理分类系统')
+    app.setApplicationVersion('1.0')
+    app.setOrganizationName('InvoiceManager')
+
+    window = InvoiceManager()
+    window.show()
+
+    sys.exit(app.exec_())
+
+
+if __name__ == '__main__':
+    main()
